@@ -21,6 +21,7 @@ logger = logging.getLogger("spm.plugins")
 _BUILTIN_MODULES = [
     "spm.defender.detectors",     # runtime detectors (Defend)
     "spm.defender.guardrails",    # Bedrock Guardrails detector (Defend)
+    "spm.defender.oss_detectors", # optional OSS detectors (Presidio, LLM Guard)
     "spm.engine.rules",           # posture rules (Govern)
     "spm.scanner.builtins",       # discovery scanners (Observe)
     "spm.integrations",           # finding/event sinks (AIDR)

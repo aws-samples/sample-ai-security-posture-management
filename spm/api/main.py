@@ -556,6 +556,19 @@ async def list_plugins(req: Request):
 
 
 # ============================================================
+# Govern — Red-team / defense-effectiveness benchmark
+# ============================================================
+
+@app.post("/spm/api/redteam/run")
+async def run_redteam(req: Request):
+    """Run the curated red-team corpus against the live detector registry and
+    return an objective defense-effectiveness scorecard."""
+    await get_current_user(req)
+    from spm.redteam.runner import run_benchmark
+    return await run_benchmark()
+
+
+# ============================================================
 # AIDR — Integrations (Security Hub / SNS / EventBridge)
 # ============================================================
 

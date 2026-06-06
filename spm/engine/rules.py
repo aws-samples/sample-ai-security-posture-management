@@ -166,3 +166,80 @@ def check_missing_guardrail_association(agent: dict) -> Finding | None:
                        remediation="Associate a Bedrock guardrail (content filters, denied topics, PII redaction).",
                        compliance_frameworks=["OWASP_LLM_TOP10:LLM01", "NIST_AI_RMF"])
     return None
+
+
+# ------------------------------------------------------------------
+# Amazon Bedrock posture rules (operate on bedrock_scanner inventory)
+# ------------------------------------------------------------------
+
+@rule("bedrock_logging_disabled", "Bedrock Invocation Logging Disabled",
+      "Bedrock model-invocation logging is off (no prompt/response audit trail)",
+      "high", "bedrock_config", ["NIST_AI_RMF", "MITRE_ATLAS"])
+def check_bedrock_logging_disabled(agent: dict) -> Finding | None:
+    if not agent.get("config", {}).get("logging_enabled", False):
+        return Finding(agent_id=agent["agent_id"], severity="high", rule_id="bedrock_logging_disabled",
+                       title="Bedrock model-invocation logging disabled",
+                       description="Prompts and responses are not logged, limiting audit and incident response.",
+                       remediation="Enable Bedrock model-invocation logging to CloudWatch and/or S3.",
+                       compliance_frameworks=["NIST_AI_RMF", "MITRE_ATLAS"])
+    return None
+
+
+@rule("guardrail_no_pii_filter", "Guardrail Missing PII Policy",
+      "Guardrail has no sensitive-information (PII) policy", "medium", "guardrail",
+      ["OWASP_LLM_TOP10:LLM02", "NIST_AI_RMF"])
+def check_guardrail_no_pii_filter(agent: dict) -> Finding | None:
+    if not agent.get("config", {}).get("has_pii_policy", False):
+        return Finding(agent_id=agent["agent_id"], severity="medium", rule_id="guardrail_no_pii_filter",
+                       title=f"Guardrail without PII policy: {agent.get('name', 'unknown')}",
+                       description="This Bedrock guardrail does not redact or block sensitive information (PII).",
+                       remediation="Add a sensitive-information policy (PII entities/regexes) to the guardrail.",
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM02", "NIST_AI_RMF"])
+    return None
+
+
+@rule("guardrail_weak_content_filter", "Weak Guardrail Content Filter",
+      "Guardrail content filters are below HIGH strength", "medium", "guardrail",
+      ["OWASP_LLM_TOP10:LLM01", "MITRE_ATLAS"])
+def check_guardrail_weak_content_filter(agent: dict) -> Finding | None:
+    cfg = agent.get("config", {})
+    if not cfg.get("has_content_filters"):
+        return Finding(agent_id=agent["agent_id"], severity="medium", rule_id="guardrail_weak_content_filter",
+                       title=f"Guardrail without content filters: {agent.get('name', 'unknown')}",
+                       description="This guardrail has no content filters configured.",
+                       remediation="Configure content filters (hate, insults, sexual, violence, prompt-attack) at HIGH strength.",
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM01", "MITRE_ATLAS"])
+    if cfg.get("min_content_filter_strength", "NONE") != "HIGH":
+        return Finding(agent_id=agent["agent_id"], severity="low", rule_id="guardrail_weak_content_filter",
+                       title=f"Weak content filter: {agent.get('name', 'unknown')}",
+                       description=f"Lowest content-filter strength is {cfg.get('min_content_filter_strength')}, not HIGH.",
+                       remediation="Raise all content-filter strengths to HIGH for input and output.",
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM01", "MITRE_ATLAS"])
+    return None
+
+
+@rule("knowledge_base_unencrypted", "Knowledge Base Without CMK",
+      "Bedrock Knowledge Base is not encrypted with a customer-managed KMS key",
+      "medium", "knowledge_base", ["OWASP_LLM_TOP10:LLM08", "NIST_AI_RMF"])
+def check_knowledge_base_unencrypted(agent: dict) -> Finding | None:
+    if not agent.get("config", {}).get("customer_managed_kms", False):
+        return Finding(agent_id=agent["agent_id"], severity="medium", rule_id="knowledge_base_unencrypted",
+                       title=f"Knowledge Base without CMK: {agent.get('name', 'unknown')}",
+                       description="RAG knowledge base does not use a customer-managed KMS key.",
+                       remediation="Encrypt the knowledge base (and its data sources/vector store) with a customer-managed KMS key.",
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM08", "NIST_AI_RMF"])
+    return None
+
+
+@rule("bedrock_agent_no_guardrail", "Bedrock Agent Without Guardrail",
+      "Bedrock Agent has no guardrail associated", "high", "bedrock_agent",
+      ["OWASP_LLM_TOP10:LLM01", "OWASP_AGENTIC:T1", "NIST_AI_RMF"])
+def check_bedrock_agent_no_guardrail(agent: dict) -> Finding | None:
+    cfg = agent.get("config", {})
+    if not cfg.get("guardrail_id") and not cfg.get("guardrailConfiguration"):
+        return Finding(agent_id=agent["agent_id"], severity="high", rule_id="bedrock_agent_no_guardrail",
+                       title=f"Bedrock Agent without guardrail: {agent.get('name', 'unknown')}",
+                       description="This Bedrock Agent has no guardrail associated to filter prompts/responses.",
+                       remediation="Associate a Bedrock guardrail with the agent alias.",
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM01", "OWASP_AGENTIC:T1", "NIST_AI_RMF"])
+    return None

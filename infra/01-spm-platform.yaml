@@ -207,6 +207,11 @@ Resources:
                   - bedrock:ListAgents
                   - bedrock:InvokeModel
                   - bedrock:ApplyGuardrail
+                  - bedrock:ListGuardrails
+                  - bedrock:GetGuardrail
+                  - bedrock:GetModelInvocationLoggingConfiguration
+                  - bedrock:ListKnowledgeBases
+                  - bedrock:GetKnowledgeBase
                   - sagemaker:ListEndpoints
                   - lambda:ListFunctions
                   - cloudtrail:LookupEvents

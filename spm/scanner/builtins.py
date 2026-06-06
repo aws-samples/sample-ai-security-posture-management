@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from spm.core.registry import scanner
 from spm.scanner import aws_platform_scanner, litellm_scanner, temporal_scanner
+from spm.scanner import bedrock_scanner  # noqa: F401  (registers builtin.bedrock_security)
 
 scanner("builtin.litellm", source="litellm", is_async=True,
         description="LiteLLM models, keys, spend")(litellm_scanner.scan)

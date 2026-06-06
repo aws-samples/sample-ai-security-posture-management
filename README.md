@@ -212,6 +212,11 @@ Rules are registered plugins (see [Extensibility](#extensibility)) mapped to the
 | `unapproved_model` | Medium | NIST, Agentic T15 |
 | `missing_guardrail_association` | Medium | OWASP LLM01, NIST |
 
+Plus **7 Amazon Bedrock posture rules** (guardrail strength/PII, knowledge-base
+encryption, model-invocation logging, agent guardrail association) — see
+[docs/bedrock-security.md](docs/bedrock-security.md). Inspect all loaded rules at
+`GET /spm/api/plugins`.
+
 ## Runtime detectors (Defend)
 
 Detectors are also plugins. Built-ins: regex + Bedrock-semantic **prompt
@@ -220,6 +225,27 @@ injection**, **jailbreak**, **system-prompt extraction**, **memory poisoning**,
 **MCP/tool usage**, **excessive agency**, and **Amazon Bedrock Guardrails**
 (content filters, denied topics, PII redaction). Run in **monitor** or
 **enforce** (inline blocking) mode.
+
+Optionally layer a best-of-breed **OSS detection ensemble** (no vendor lock-in)
+with `pip install "ai-spm[security]"`: ProtectAI **LLM Guard** (ML
+prompt-injection + secrets) and Microsoft **Presidio** (PII). These register
+automatically when installed and no-op when not.
+
+## Deep Amazon Bedrock security
+
+A dedicated Bedrock scanner discovers **Guardrails** (filter strength, PII,
+denied topics), **Knowledge Bases** (KMS encryption), **model-invocation
+logging**, and **Bedrock Agents**, with seven Bedrock-specific Govern rules.
+Full details: [docs/bedrock-security.md](docs/bedrock-security.md).
+
+## Measure your defenses (red-team benchmark)
+
+`POST /spm/api/redteam/run` runs a curated attack corpus (injection, jailbreak,
+extraction, exfiltration, insecure output) plus benign controls against your
+**live** detector stack and returns an objective **defense-effectiveness score**
+— detection rate, false-positive rate, and per-category breakdown. Use it to
+prove (not just claim) coverage before and after enabling Guardrails / the OSS
+ensemble.
 
 ## AIDR integrations
 

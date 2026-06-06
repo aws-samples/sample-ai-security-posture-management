@@ -290,6 +290,18 @@ Inspect everything that's loaded at `GET /spm/api/plugins`. Full guide:
 [docs/extending.md](docs/extending.md). How it stacks up against commercial AI
 agent security platforms: [docs/comparison.md](docs/comparison.md).
 
+## Testing
+
+```bash
+pip install -e ".[dev]"
+pytest -q
+```
+
+The suite covers the plugin registry, the detection logic against the red-team
+corpus (asserts ≥80% recall and 0 false positives on benign controls), the risk
+scoring engine, and `db.py` against moto-mocked DynamoDB. CI runs on every push
+(see `.github/workflows/tests.yml`).
+
 ## Security
 
 - **Authentication:** Set `COGNITO_POOL_ID`/`COGNITO_CLIENT_ID`. With them

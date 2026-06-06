@@ -1,4 +1,4 @@
-"""Generate the AI SPM architecture diagram as a PNG.
+"""Generate the AI SPM architecture diagram as a PNG (light theme).
 
 Requires the `diagrams` package (https://diagrams.mingrammer.com/) and Graphviz.
 
@@ -14,7 +14,7 @@ Output:
 """
 import os
 
-from diagrams import Cluster, Diagram, Edge
+from diagrams import Cluster, Diagram, Edge, Node
 from diagrams.aws.compute import ECS, Fargate
 from diagrams.aws.database import Dynamodb
 from diagrams.aws.devtools import XRay
@@ -25,16 +25,38 @@ from diagrams.onprem.client import Users
 
 OUTPUT = os.path.join(os.path.dirname(__file__), "spm-ui", "public", "architecture")
 
+
+def lab(text: str) -> str:
+    """Prefix a blank line so the node label never overlaps the icon above it."""
+    return "\n" + text
+
+
+# ---- Light theme ----
 graph_attr = {
-    "fontsize": "14",
-    "bgcolor": "#0a0a0f",
-    "fontcolor": "#e5e7eb",
-    "pad": "0.8",
-    "nodesep": "0.8",
-    "ranksep": "1.0",
+    "fontsize": "30",
+    "bgcolor": "#ffffff",
+    "fontcolor": "#0f172a",
+    "fontname": "Helvetica-Bold",
+    "pad": "1.0",
+    "nodesep": "1.0",
+    "ranksep": "1.3",
+    "dpi": "170",
+    "splines": "spline",
 }
-node_attr = {"fontsize": "11", "fontcolor": "#e5e7eb"}
-edge_attr = {"color": "#4b5563", "fontsize": "9", "fontcolor": "#9ca3af"}
+node_attr = {
+    "fontsize": "16",
+    "fontcolor": "#0f172a",
+    "fontname": "Helvetica-Bold",
+}
+edge_attr = {"color": "#94a3b8", "fontsize": "16", "fontcolor": "#334155", "fontname": "Helvetica"}
+
+
+def cl(bg, fg, pen):
+    """Cluster style helper (light tints)."""
+    return {"bgcolor": bg, "fontcolor": fg, "pencolor": pen,
+            "fontsize": "22", "fontname": "Helvetica-Bold", "style": "rounded",
+            "penwidth": "2", "margin": "24"}
+
 
 with Diagram(
     "AI Security Posture Management",
@@ -46,51 +68,60 @@ with Diagram(
     node_attr=node_attr,
     edge_attr=edge_attr,
 ):
-    users = Users("Security\nTeam")
+    # Headline value proposition banner (anchored above everything else)
+    banner = Node(
+        "AI SPM  —  Discover, assess & protect every AI agent\n"
+        "100% AWS-native   •   no changes to agent code   •   monitor or enforce",
+        shape="box", style="rounded,filled", fillcolor="#0f172a", color="#0f172a",
+        fontcolor="#ffffff", fontsize="22", fontname="Helvetica-Bold",
+        fixedsize="false", labelloc="c", width="0", height="0", margin="0.6,0.35",
+    )
+    users = Users(lab("Security Team"))
+    banner >> Edge(style="invis") >> users
 
-    with Cluster("AWS Cloud", graph_attr={"bgcolor": "#111118", "fontcolor": "#6b7280", "style": "rounded", "pencolor": "#1f2937"}):
+    with Cluster("AWS Cloud", graph_attr=cl("#f8fafc", "#64748b", "#cbd5e1")):
 
-        with Cluster("CDN Layer", graph_attr={"bgcolor": "#13131d", "fontcolor": "#4b5563", "style": "rounded", "pencolor": "#1f2937"}):
-            cf_spm = CloudFront("SPM\nDashboard")
+        with Cluster("CDN Layer", graph_attr=cl("#f5f3ff", "#6d28d9", "#c4b5fd")):
+            cf_spm = CloudFront(lab("SPM Dashboard"))
 
-        alb = ELB("Application\nLoad Balancer")
-        cognito = Cognito("Cognito\nAuth")
+        alb = ELB(lab("Application\nLoad Balancer"))
+        cognito = Cognito(lab("Cognito Auth"))
 
-        with Cluster("Monitored AI Platform (your environment)", graph_attr={"bgcolor": "#0f1520", "fontcolor": "#3b82f6", "style": "rounded", "pencolor": "#1e3a5f"}):
-            workers = Fargate("AI Agents /\nWorkers")
-            temporal = Fargate("Temporal\nServer")
-            litellm = Fargate("LiteLLM\nGateway")
+        with Cluster("Monitored AI Platform (your environment)", graph_attr=cl("#eff6ff", "#1d4ed8", "#93c5fd")):
+            workers = Fargate(lab("AI Agents /\nWorkers"))
+            temporal = Fargate(lab("Temporal Server"))
+            litellm = Fargate(lab("LiteLLM Gateway"))
 
-        with Cluster("AI SPM", graph_attr={"bgcolor": "#1a0f0f", "fontcolor": "#ef4444", "style": "rounded,bold", "pencolor": "#7f1d1d"}):
+        with Cluster("AI SPM  —  Observe • Govern • Defend", graph_attr=cl("#fef2f2", "#dc2626", "#fca5a5")):
 
-            with Cluster("Observe", graph_attr={"bgcolor": "#0f1520", "fontcolor": "#3b82f6", "style": "rounded", "pencolor": "#1e3a5f"}):
-                scanner_litellm = ECS("LiteLLM\nScanner")
-                scanner_temporal = ECS("Temporal\nScanner")
-                scanner_xray = ECS("X-Ray\nScanner")
+            with Cluster("Observe\nFind every AI agent + shadow AI", graph_attr=cl("#eff6ff", "#1d4ed8", "#93c5fd")):
+                scanner_litellm = ECS(lab("LiteLLM Scanner"))
+                scanner_temporal = ECS(lab("Temporal Scanner"))
+                scanner_xray = ECS(lab("X-Ray Scanner"))
 
-            with Cluster("Govern", graph_attr={"bgcolor": "#1a1508", "fontcolor": "#f59e0b", "style": "rounded", "pencolor": "#78350f"}):
-                policy_engine = ECS("Policy Engine\n10 Rules")
+            with Cluster("Govern\nOWASP • NIST AI RMF • MITRE ATLAS", graph_attr=cl("#fffbeb", "#b45309", "#fcd34d")):
+                policy_engine = ECS(lab("Policy Engine\n10 Rules"))
 
-            with Cluster("Defend", graph_attr={"bgcolor": "#1a0f0f", "fontcolor": "#ef4444", "style": "rounded", "pencolor": "#7f1d1d"}):
-                callback = ECS("LiteLLM\nCallback")
-                trace_analyzer = ECS("Trace\nAnalyzer")
-                alert_engine = ECS("Alert\nCorrelation")
+            with Cluster("Defend\nBlock injection & data exfil in real time", graph_attr=cl("#fef2f2", "#dc2626", "#fca5a5")):
+                callback = ECS(lab("LiteLLM Callback"))
+                trace_analyzer = ECS(lab("Trace Analyzer"))
+                alert_engine = ECS(lab("Alert Correlation"))
 
-            spm_api = Fargate("SPM API\n:8001")
-            spm_ui = Fargate("SPM UI\n:3001")
+            spm_api = Fargate(lab("SPM API :8001"))
+            spm_ui = Fargate(lab("SPM UI :3001"))
 
-        bedrock = Sagemaker("Amazon\nBedrock")
-        xray = XRay("AWS\nX-Ray")
+        bedrock = Sagemaker(lab("Amazon Bedrock"))
+        xray = XRay(lab("AWS X-Ray"))
 
-        with Cluster("Data Layer", graph_attr={"bgcolor": "#13131d", "fontcolor": "#4b5563", "style": "rounded", "pencolor": "#1f2937"}):
-            ddb_inventory = Dynamodb("Inventory")
-            ddb_findings = Dynamodb("Findings")
-            ddb_policies = Dynamodb("Policies")
-            ddb_runtime = Dynamodb("Runtime\nEvents")
+        with Cluster("Data Layer", graph_attr=cl("#f1f5f9", "#475569", "#cbd5e1")):
+            ddb_inventory = Dynamodb(lab("Inventory"))
+            ddb_findings = Dynamodb(lab("Findings"))
+            ddb_policies = Dynamodb(lab("Policies"))
+            ddb_runtime = Dynamodb(lab("Runtime Events"))
 
     # User flows
-    users >> Edge(color="#ef4444", style="bold") >> cf_spm
-    cf_spm >> Edge(color="#ef4444") >> alb
+    users >> Edge(color="#ef4444", penwidth="2.5") >> cf_spm
+    cf_spm >> Edge(color="#ef4444", penwidth="2") >> alb
     alb >> spm_ui
     alb >> spm_api
     spm_api >> Edge(style="dashed", color="#6366f1") >> cognito
@@ -113,13 +144,13 @@ with Diagram(
     trace_analyzer >> Edge(color="#ef4444") >> xray
     alert_engine >> Edge(color="#ef4444") >> ddb_runtime
 
-    # SPM API to data
-    spm_api >> Edge(color="#4b5563") >> ddb_inventory
-    spm_api >> Edge(color="#4b5563") >> ddb_findings
-    spm_api >> Edge(color="#4b5563") >> ddb_policies
-    spm_api >> Edge(color="#4b5563") >> ddb_runtime
+    # SPM API to data stores
+    spm_api >> Edge(color="#94a3b8") >> ddb_inventory
+    spm_api >> Edge(color="#94a3b8") >> ddb_findings
+    spm_api >> Edge(color="#94a3b8") >> ddb_policies
+    spm_api >> Edge(color="#94a3b8") >> ddb_runtime
 
-    # ADOT to X-Ray
+    # ADOT telemetry to X-Ray
     workers >> Edge(style="dashed", color="#10b981", label="ADOT") >> xray
 
 print(f"Diagram written to {OUTPUT}.png")

@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --accent: #ef4444;
+  --accent-light: #f87171;
+}
+
+body {
+  @apply bg-[#0a0a0f] text-gray-100 antialiased;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+.gradient-text {
+  @apply bg-clip-text text-transparent bg-gradient-to-r from-red-400 to-orange-400;
+}

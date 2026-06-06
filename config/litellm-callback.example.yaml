@@ -1,0 +1,25 @@
+# Example LiteLLM proxy configuration showing how to register the AI SPM
+# runtime callback (Defend pillar). Add the `callbacks` entry to your existing
+# LiteLLM config. The SPM package (spm/) must be importable in the LiteLLM
+# container, and the SPM_* / AWS_REGION environment variables must be set so the
+# callback can read its mode and write runtime events to DynamoDB.
+#
+# Docs: https://docs.litellm.ai/docs/proxy/configs
+
+litellm_settings:
+  # Register the SPM custom callback for runtime monitoring + inline blocking.
+  callbacks: ["spm.defender.litellm_callback.SPMCallback"]
+  drop_params: true
+  num_retries: 2
+
+general_settings:
+  # NEVER hardcode the master key. Read it from the environment instead.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: true
+
+# Define your own model_list as needed, for example:
+# model_list:
+#   - model_name: claude-3-5-sonnet
+#     litellm_params:
+#       model: bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0
+#       max_tokens: 4096

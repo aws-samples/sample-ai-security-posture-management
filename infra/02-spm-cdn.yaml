@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AI SPM - Dedicated ALB listener for the SPM dashboard + a CloudFront
+  distribution in front of it. Routes /spm/* to the SPM API and everything else
+  to the SPM UI. Reuses the target groups exported by 01-spm-platform.yaml.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: ai-spm
+  AlbArn:
+    Type: String
+    Description: ARN of your existing Application Load Balancer.
+  AlbDnsName:
+    Type: String
+    Description: DNS name of your existing ALB (CloudFront origin).
+  ListenerPort:
+    Type: Number
+    Default: 8090
+    Description: >
+      Port for the dedicated SPM listener on the ALB. The ALB security group
+      must allow inbound traffic on this port from the CloudFront managed prefix
+      list (com.amazonaws.global.cloudfront.origin-facing).
+
+Resources:
+  # ============ Dedicated ALB Listener for SPM ============
+  SPMALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AlbArn
+      Port: !Ref ListenerPort
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !ImportValue
+            Fn::Sub: ${EnvironmentName}-SPMUITargetGroup
+
+  # /spm/* -> SPM API
+  SPMAPIRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref SPMALBListener
+      Priority: 1
+      Conditions:
+        - Field: path-pattern
+          Values: ['/spm/*']
+      Actions:
+        - Type: forward
+          TargetGroupArn: !ImportValue
+            Fn::Sub: ${EnvironmentName}-SPMAPITargetGroup
+
+  # ============ CloudFront Distribution ============
+  # CachePolicyId / OriginRequestPolicyId below are AWS-managed policies:
+  #   4135ea2d-6df8-44a3-9df3-4b5a84be39ad = CachingDisabled
+  #   216adef6-5c7f-47e4-b989-5492eafa07d3 = AllViewer (origin request)
+  #   658327ea-f89d-4fab-a63d-7e88639e58f6 = CachingOptimized
+  SPMDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub ${EnvironmentName} - AI SPM Dashboard
+        DefaultCacheBehavior:
+          TargetOriginId: spm-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+          Compress: true
+        CacheBehaviors:
+          - PathPattern: /spm/*
+            TargetOriginId: spm-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+            Compress: true
+          - PathPattern: /_next/static/*
+            TargetOriginId: spm-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            Compress: true
+        Origins:
+          - Id: spm-origin
+            DomainName: !Ref AlbDnsName
+            CustomOriginConfig:
+              HTTPPort: !Ref ListenerPort
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+        PriceClass: PriceClass_100
+        HttpVersion: http2and3
+
+Outputs:
+  SPMDashboardUrl:
+    Description: AI SPM Dashboard URL
+    Value: !Sub https://${SPMDistribution.DomainName}
+  SPMDistributionId:
+    Description: SPM CloudFront distribution ID
+    Value: !Ref SPMDistribution

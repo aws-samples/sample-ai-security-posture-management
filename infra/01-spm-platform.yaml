@@ -1,0 +1,391 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AI SPM - DynamoDB tables, SPM API + UI ECS Fargate services, IAM task role, and
+  ALB target groups. Deploys as an extension into an EXISTING VPC / ECS cluster /
+  ALB / Cloud Map namespace that already runs your AI platform (LiteLLM + Temporal
+  + X-Ray). All environment-specific values are passed as parameters.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: ai-spm
+    Description: Prefix for resource names and DynamoDB tables.
+
+  SPMAPIImage:
+    Type: String
+    Description: ECR image URI for the SPM API (built from Dockerfile.spm-api).
+  SPMUIImage:
+    Type: String
+    Description: ECR image URI for the SPM UI (built from spm-ui/Dockerfile).
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC that hosts your ECS cluster and ALB.
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets (with NAT or VPC endpoints) for the SPM tasks.
+  EcsClusterName:
+    Type: String
+    Description: Name of the existing ECS cluster to run the SPM services in.
+  EcsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group applied to the SPM ECS tasks.
+  EcsTaskExecutionRoleArn:
+    Type: String
+    Description: ARN of an ECS task execution role (pulls images, writes logs).
+  ServiceDiscoveryNamespaceId:
+    Type: String
+    Description: Cloud Map private DNS namespace ID for service discovery.
+
+  CognitoUserPoolId:
+    Type: String
+    Default: ''
+    Description: >
+      Cognito user pool ID for dashboard auth. Leave blank to disable auth
+      (NOT recommended outside local testing).
+  CognitoClientId:
+    Type: String
+    Default: ''
+    Description: Cognito app client ID for the dashboard.
+
+  LiteLLMUrl:
+    Type: String
+    Default: ''
+    Description: >
+      Base URL of your LiteLLM proxy, e.g. http://litellm.<namespace>.local:4000
+  LiteLLMMasterKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: >
+      LiteLLM master/admin key used by the scanners and remediation actions.
+      For production, store this in AWS Secrets Manager and inject it via the
+      task definition's `Secrets` instead of this plaintext parameter.
+  TemporalAddress:
+    Type: String
+    Default: ''
+    Description: Temporal frontend address, e.g. temporal.<namespace>.local:7233
+
+Conditions:
+  HasCognito: !Not [!Equals [!Ref CognitoUserPoolId, '']]
+
+Resources:
+  # ============ DynamoDB Tables ============
+  SPMInventoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${EnvironmentName}-spm-inventory
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: agent_id
+          AttributeType: S
+        - AttributeName: source
+          AttributeType: S
+      KeySchema:
+        - AttributeName: agent_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: source-index
+          KeySchema:
+            - AttributeName: source
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  SPMFindingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${EnvironmentName}-spm-findings
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: finding_id
+          AttributeType: S
+        - AttributeName: agent_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: finding_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: agent_id-index
+          KeySchema:
+            - AttributeName: agent_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  SPMPoliciesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${EnvironmentName}-spm-policies
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: policy_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: policy_id
+          KeyType: HASH
+
+  SPMRuntimeEventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${EnvironmentName}-spm-runtime-events
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: event_id
+          AttributeType: S
+        - AttributeName: agent_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: event_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      GlobalSecondaryIndexes:
+        - IndexName: agent_id-index
+          KeySchema:
+            - AttributeName: agent_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  # ============ IAM Role for SPM tasks ============
+  SPMTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-spm-task
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt SPMInventoryTable.Arn
+                  - !Sub ${SPMInventoryTable.Arn}/index/*
+                  - !GetAtt SPMFindingsTable.Arn
+                  - !Sub ${SPMFindingsTable.Arn}/index/*
+                  - !GetAtt SPMPoliciesTable.Arn
+                  - !GetAtt SPMRuntimeEventsTable.Arn
+                  - !Sub ${SPMRuntimeEventsTable.Arn}/index/*
+        - PolicyName: XRayReadAndTrace
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:GetTraceSummaries
+                  - xray:BatchGetTraces
+                  - xray:GetServiceGraph
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: '*'
+        - PolicyName: DiscoveryReadOnly
+          # Read-only discovery of AI resources (Bedrock agents, SageMaker
+          # endpoints, AI Lambdas, and shadow-AI detection via CloudTrail).
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:ListAgents
+                  - bedrock:InvokeModel
+                  - sagemaker:ListEndpoints
+                  - lambda:ListFunctions
+                  - cloudtrail:LookupEvents
+                Resource: '*'
+
+  # ============ SPM API Service ============
+  SPMAPILogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}/spm-api
+      RetentionInDays: 14
+
+  SPMAPIServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: spm-api
+      NamespaceId: !Ref ServiceDiscoveryNamespaceId
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: 10
+
+  SPMAPITargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-spm-api
+      Port: 8001
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckPath: /spm/health
+      HealthCheckIntervalSeconds: 30
+
+  SPMAPITaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-spm-api
+      Cpu: '512'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !Ref EcsTaskExecutionRoleArn
+      TaskRoleArn: !GetAtt SPMTaskRole.Arn
+      ContainerDefinitions:
+        - Name: spm-api
+          Image: !Ref SPMAPIImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8001
+          Environment:
+            - Name: ENVIRONMENT_NAME
+              Value: !Ref EnvironmentName
+            - Name: TEMPORAL_ADDRESS
+              Value: !Ref TemporalAddress
+            - Name: LITELLM_URL
+              Value: !Ref LiteLLMUrl
+            - Name: LITELLM_KEY
+              Value: !Ref LiteLLMMasterKey
+            - Name: SPM_INVENTORY_TABLE
+              Value: !Ref SPMInventoryTable
+            - Name: SPM_FINDINGS_TABLE
+              Value: !Ref SPMFindingsTable
+            - Name: SPM_POLICIES_TABLE
+              Value: !Ref SPMPoliciesTable
+            - Name: SPM_RUNTIME_TABLE
+              Value: !Ref SPMRuntimeEventsTable
+            - Name: COGNITO_POOL_ID
+              Value: !Ref CognitoUserPoolId
+            - Name: COGNITO_CLIENT_ID
+              Value: !Ref CognitoClientId
+            - Name: OTEL_EXPORTER_OTLP_ENDPOINT
+              Value: http://localhost:4317
+            - Name: OTEL_SERVICE_NAME
+              Value: spm-api
+            - Name: PYTHONUNBUFFERED
+              Value: '1'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref SPMAPILogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: spm-api
+
+  SPMAPIService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-spm-api
+      Cluster: !Ref EcsClusterName
+      TaskDefinition: !Ref SPMAPITaskDef
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref EcsSecurityGroupId
+      ServiceRegistries:
+        - RegistryArn: !GetAtt SPMAPIServiceDiscovery.Arn
+      LoadBalancers:
+        - ContainerName: spm-api
+          ContainerPort: 8001
+          TargetGroupArn: !Ref SPMAPITargetGroup
+
+  # ============ SPM UI Service ============
+  SPMUILogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}/spm-ui
+      RetentionInDays: 14
+
+  SPMUITargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-spm-ui
+      Port: 3001
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+
+  SPMUITaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-spm-ui
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !Ref EcsTaskExecutionRoleArn
+      ContainerDefinitions:
+        - Name: spm-ui
+          Image: !Ref SPMUIImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3001
+          Environment:
+            - Name: NEXT_PUBLIC_API_URL
+              Value: ''
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref SPMUILogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: spm-ui
+
+  SPMUIService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-spm-ui
+      Cluster: !Ref EcsClusterName
+      TaskDefinition: !Ref SPMUITaskDef
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref EcsSecurityGroupId
+      LoadBalancers:
+        - ContainerName: spm-ui
+          ContainerPort: 3001
+          TargetGroupArn: !Ref SPMUITargetGroup
+
+Outputs:
+  SPMInventoryTableName:
+    Value: !Ref SPMInventoryTable
+    Export:
+      Name: !Sub ${EnvironmentName}-SPMInventoryTable
+  SPMUITargetGroupArn:
+    Value: !Ref SPMUITargetGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-SPMUITargetGroup
+  SPMAPITargetGroupArn:
+    Value: !Ref SPMAPITargetGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-SPMAPITargetGroup

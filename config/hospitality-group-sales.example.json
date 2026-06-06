@@ -1,0 +1,27 @@
+{
+  "_comment": "Featured use case: Group Sales & Event Management with AI Planning (Hospitality). Point SPM_CONFIG_FILE at this file to teach the policy engine which Temporal workflows you expect and the downstream services each is allowed to call. Any service-graph edge outside these baselines raises an 'unexpected_dependency' finding; workflows listed here but never executed raise 'stale_agent'. See docs/use-cases/group-sales-event-management.md.",
+
+  "known_workflows": {
+    "GroupSalesInquiryWorkflow": { "queue": "group-sales", "type": "orchestrator" },
+    "RFPResponseWorkflow":       { "queue": "group-sales", "type": "agent" },
+    "VenueAllocationWorkflow":   { "queue": "event-planning", "type": "agent" },
+    "CateringBanquetWorkflow":   { "queue": "event-planning", "type": "agent" },
+    "RoomBlockWorkflow":         { "queue": "event-planning", "type": "agent" },
+    "BanquetEventOrderWorkflow": { "queue": "event-planning", "type": "agent" },
+    "SchedulingWorkflow":        { "queue": "event-planning", "type": "agent" },
+    "PricingContractingWorkflow":{ "queue": "group-sales", "type": "agent" },
+    "VendorCoordinationWorkflow":{ "queue": "event-planning", "type": "agent" }
+  },
+
+  "expected_dependencies": {
+    "GroupSalesInquiryWorkflow":  ["LLM-Gateway", "CRM-API"],
+    "RFPResponseWorkflow":        ["LLM-Gateway", "CRM-API", "PMS-API"],
+    "VenueAllocationWorkflow":    ["LLM-Gateway", "PMS-API"],
+    "CateringBanquetWorkflow":    ["LLM-Gateway", "Catering-API"],
+    "RoomBlockWorkflow":          ["LLM-Gateway", "PMS-API"],
+    "BanquetEventOrderWorkflow":  ["LLM-Gateway", "PMS-API", "Catering-API"],
+    "SchedulingWorkflow":         ["LLM-Gateway"],
+    "PricingContractingWorkflow": ["LLM-Gateway", "CRM-API", "Payment-API"],
+    "VendorCoordinationWorkflow": ["LLM-Gateway", "Vendor-Directory-API"]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "_comment": "Optional, environment-specific knowledge for the scanners and policy engine. Point the SPM_CONFIG_FILE environment variable at a copy of this file. All keys are optional; omit them for fully generic discovery.",
+
+  "known_workflows": {
+    "OrderProcessingWorkflow": { "queue": "orders", "type": "orchestrator" },
+    "FraudCheckWorkflow": { "queue": "orders", "type": "agent" }
+  },
+
+  "expected_dependencies": {
+    "OrderProcessingWorkflow": ["LLM-Gateway", "Inventory-API"],
+    "FraudCheckWorkflow": ["LLM-Gateway", "Risk-Scoring-API"]
+  }
+}

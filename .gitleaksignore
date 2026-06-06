@@ -1,0 +1,3 @@
+# Intentional, non-functional test fixtures (AWS documented example key) in the
+# red-team corpus. See .gitleaks.toml for the path/regex allowlist.
+f6ac9908aefd6e98645455a5ed7a6dc86ded8bc9:spm/redteam/corpus.py:aws-access-token:48

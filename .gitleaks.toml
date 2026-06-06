@@ -1,0 +1,23 @@
+# Gitleaks configuration for AI SPM.
+#
+# The red-team corpus and tests intentionally contain NON-functional, public
+# example "secrets" (e.g. AWS's documented example access key AKIAIOSFODNN7EXAMPLE)
+# so the detectors have something to match. These are not real credentials.
+# This config extends the default gitleaks ruleset and allowlists those fixtures.
+
+title = "AI SPM gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional non-secret test fixtures (red-team corpus and tests)"
+paths = [
+  '''spm/redteam/corpus\.py''',
+  '''tests/.*''',
+]
+regexes = [
+  # AWS-published example credentials (non-functional, used throughout AWS docs)
+  '''AKIAIOSFODNN7EXAMPLE''',
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
+]

@@ -18,9 +18,10 @@ from diagrams import Cluster, Diagram, Edge, Node
 from diagrams.aws.compute import ECS, Fargate
 from diagrams.aws.database import Dynamodb
 from diagrams.aws.devtools import XRay
+from diagrams.aws.integration import Eventbridge, SimpleNotificationServiceSns
 from diagrams.aws.ml import Sagemaker
 from diagrams.aws.network import CloudFront, ELB
-from diagrams.aws.security import Cognito
+from diagrams.aws.security import Cognito, Guardduty, SecurityHub
 from diagrams.onprem.client import Users
 
 OUTPUT = os.path.join(os.path.dirname(__file__), "spm-ui", "public", "architecture")
@@ -98,20 +99,27 @@ with Diagram(
                 scanner_litellm = ECS(lab("LiteLLM Scanner"))
                 scanner_temporal = ECS(lab("Temporal Scanner"))
                 scanner_xray = ECS(lab("X-Ray Scanner"))
+                scanner_bedrock = ECS(lab("Bedrock Scanner"))
 
             with Cluster("Govern\nOWASP • NIST AI RMF • MITRE ATLAS", graph_attr=cl("#fffbeb", "#b45309", "#fcd34d")):
-                policy_engine = ECS(lab("Policy Engine\n10 Rules"))
+                policy_engine = ECS(lab("Policy Engine\n22 Rules + Risk Score"))
 
             with Cluster("Defend\nBlock injection & data exfil in real time", graph_attr=cl("#fef2f2", "#dc2626", "#fca5a5")):
-                callback = ECS(lab("LiteLLM Callback"))
+                callback = ECS(lab("LiteLLM Callback\n+ Guardrails"))
                 trace_analyzer = ECS(lab("Trace Analyzer"))
                 alert_engine = ECS(lab("Alert Correlation"))
 
             spm_api = Fargate(lab("SPM API :8001"))
             spm_ui = Fargate(lab("SPM UI :3001"))
 
-        bedrock = Sagemaker(lab("Amazon Bedrock"))
+        bedrock = Sagemaker(lab("Amazon Bedrock\n+ Guardrails"))
         xray = XRay(lab("AWS X-Ray"))
+
+        with Cluster("SecOps / AIDR", graph_attr=cl("#fef2f2", "#b91c1c", "#fca5a5")):
+            guardduty = Guardduty(lab("GuardDuty\nAI Protection"))
+            security_hub = SecurityHub(lab("Security Hub"))
+            sns = SimpleNotificationServiceSns(lab("SNS"))
+            eventbridge = Eventbridge(lab("EventBridge"))
 
         with Cluster("Data Layer", graph_attr=cl("#f1f5f9", "#475569", "#cbd5e1")):
             ddb_inventory = Dynamodb(lab("Inventory"))
@@ -135,12 +143,14 @@ with Diagram(
     scanner_litellm >> Edge(color="#3b82f6", label="models\nkeys\nspend") >> litellm
     scanner_temporal >> Edge(color="#a855f7", label="workflows\nactivities") >> temporal
     scanner_xray >> Edge(color="#10b981", label="traces\ntopology") >> xray
+    scanner_bedrock >> Edge(color="#16a34a", label="guardrails\nKB · logging") >> bedrock
 
     # Govern
     policy_engine >> Edge(color="#f59e0b") >> ddb_findings
 
     # Defend
     callback >> Edge(color="#ef4444", label="intercept") >> litellm
+    callback >> Edge(color="#ef4444", style="dashed", label="ApplyGuardrail") >> bedrock
     trace_analyzer >> Edge(color="#ef4444") >> xray
     alert_engine >> Edge(color="#ef4444") >> ddb_runtime
 
@@ -149,6 +159,12 @@ with Diagram(
     spm_api >> Edge(color="#94a3b8") >> ddb_findings
     spm_api >> Edge(color="#94a3b8") >> ddb_policies
     spm_api >> Edge(color="#94a3b8") >> ddb_runtime
+
+    # AIDR: GuardDuty in, Security Hub / SNS / EventBridge out
+    guardduty >> Edge(color="#b91c1c", label="AI threat\nfindings") >> spm_api
+    spm_api >> Edge(color="#b91c1c", label="ASFF") >> security_hub
+    spm_api >> Edge(color="#b91c1c", label="alerts") >> sns
+    spm_api >> Edge(color="#b91c1c", label="events") >> eventbridge
 
     # ADOT telemetry to X-Ray
     workers >> Edge(style="dashed", color="#10b981", label="ADOT") >> xray

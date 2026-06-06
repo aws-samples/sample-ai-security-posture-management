@@ -590,6 +590,14 @@ async def sync_security_hub(req: Request):
     return {"findings": len(findings), "results": dispatch_findings(findings)}
 
 
+@app.post("/spm/api/integrations/guardduty/ingest")
+async def ingest_guardduty(req: Request):
+    """Ingest Amazon GuardDuty AI Protection (Bedrock threat) findings as SPM findings."""
+    await get_current_user(req)
+    from spm.integrations.guardduty import ingest
+    return ingest()
+
+
 # ============================================================
 # Defend — Transparent LLM Proxy (OpenAI-compatible)
 # Agents call this instead of LiteLLM directly.

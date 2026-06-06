@@ -9,7 +9,11 @@ Compliance tags map to:
   * OWASP LLM Top 10 (2025):  LLM01 Prompt Injection, LLM02 Sensitive Info
     Disclosure, LLM05 Improper Output Handling, LLM06 Excessive Agency,
     LLM08 Vector/Embedding Weaknesses, LLM10 Unbounded Consumption.
-  * OWASP Agentic AI threats (T1..T15), e.g. T2 Tool Misuse, T6 Excessive Agency.
+  * OWASP Top 10 for Agentic Applications (Dec 2025): ASI01 Agent Goal Hijack,
+    ASI02 Tool Misuse, ASI03 Identity & Privilege Abuse, ASI04 Agentic Supply
+    Chain, ASI05 Unexpected Code Execution, ASI06 Memory/Context Poisoning,
+    ASI07 Insecure Inter-agent Comms, ASI08 Cascading Failures, ASI09
+    Human-Agent Trust Exploitation, ASI10 Rogue Agents.
   * MITRE ATLAS adversarial-ML tactics.
 """
 from __future__ import annotations
@@ -25,7 +29,7 @@ from spm.engine import policy_engine as pe
 
 rule("overprivileged_key", "Overprivileged API Key",
      "Key has no budget limit or model restrictions", "high", "key",
-     ["OWASP_LLM_TOP10:LLM06", "OWASP_AGENTIC:T6", "NIST_AI_RMF"])(pe._check_overprivileged_key)
+     ["OWASP_LLM_TOP10:LLM06", "OWASP_AGENTIC:ASI03", "NIST_AI_RMF"])(pe._check_overprivileged_key)
 
 rule("missing_guardrails", "Missing Model Guardrails",
      "Model config lacks max_tokens limits", "medium", "model",
@@ -53,7 +57,7 @@ rule("latency_anomaly", "Latency Anomaly",
 
 rule("excessive_llm_calls", "Excessive LLM Calls",
      "Agent making more LLM calls per execution than baseline", "medium", "workflow",
-     ["OWASP_LLM_TOP10:LLM06", "OWASP_AGENTIC:T6", "MITRE_ATLAS"])(pe._check_excessive_llm_calls)
+     ["OWASP_LLM_TOP10:LLM06", "OWASP_AGENTIC:ASI02", "MITRE_ATLAS"])(pe._check_excessive_llm_calls)
 
 rule("missing_trace_propagation", "Missing Trace Propagation",
      "Workflow executions lack trace context", "low", "workflow",
@@ -61,7 +65,7 @@ rule("missing_trace_propagation", "Missing Trace Propagation",
 
 rule("unexpected_dependency", "Unexpected Dependency",
      "Agent calling a service not in expected dependency graph", "high", "topology",
-     ["OWASP_AGENTIC:T2", "MITRE_ATLAS", "OWASP_LLM_TOP10:LLM06"],
+     ["OWASP_AGENTIC:ASI02", "MITRE_ATLAS", "OWASP_LLM_TOP10:LLM06"],
      scope="topology")(pe._check_unexpected_dependency)
 
 
@@ -79,7 +83,7 @@ def _recent_event_types(agent_id: str, types: set[str], limit: int = 100) -> int
 
 @rule("jailbreak_activity", "Jailbreak Activity",
       "Agent has recent jailbreak attempts", "high", "*",
-      ["OWASP_LLM_TOP10:LLM01", "OWASP_AGENTIC:T1", "MITRE_ATLAS"])
+      ["OWASP_LLM_TOP10:LLM01", "OWASP_AGENTIC:ASI01", "MITRE_ATLAS"])
 def check_jailbreak_activity(agent: dict) -> Finding | None:
     n = _recent_event_types(agent["agent_id"], {"jailbreak"})
     if n:
@@ -87,7 +91,7 @@ def check_jailbreak_activity(agent: dict) -> Finding | None:
                        title=f"Jailbreak attempts: {agent.get('name', 'unknown')}",
                        description=f"{n} jailbreak attempt(s) detected against this agent.",
                        remediation="Enable enforce mode and associate a Bedrock guardrail.",
-                       compliance_frameworks=["OWASP_LLM_TOP10:LLM01", "OWASP_AGENTIC:T1", "MITRE_ATLAS"])
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM01", "OWASP_AGENTIC:ASI01", "MITRE_ATLAS"])
     return None
 
 
@@ -107,7 +111,7 @@ def check_sensitive_data_exposure(agent: dict) -> Finding | None:
 
 @rule("insecure_output_handling", "Insecure Output Handling",
       "Agent emits dangerous output (scripts, exfil links, shell)", "high", "*",
-      ["OWASP_LLM_TOP10:LLM05", "MITRE_ATLAS"])
+      ["OWASP_LLM_TOP10:LLM05", "OWASP_AGENTIC:ASI05", "MITRE_ATLAS"])
 def check_insecure_output_handling(agent: dict) -> Finding | None:
     n = _recent_event_types(agent["agent_id"], {"insecure_output"})
     if n:
@@ -115,13 +119,13 @@ def check_insecure_output_handling(agent: dict) -> Finding | None:
                        title=f"Insecure output handling: {agent.get('name', 'unknown')}",
                        description=f"{n} response(s) contained unsafe constructs (scripts/links/commands).",
                        remediation="Sanitize/encode model output before rendering or executing downstream.",
-                       compliance_frameworks=["OWASP_LLM_TOP10:LLM05", "MITRE_ATLAS"])
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM05", "OWASP_AGENTIC:ASI05", "MITRE_ATLAS"])
     return None
 
 
 @rule("excessive_agency", "Excessive Agency",
       "Agent invokes too many or too wide a set of tools", "high", "*",
-      ["OWASP_LLM_TOP10:LLM06", "OWASP_AGENTIC:T6", "MITRE_ATLAS"])
+      ["OWASP_LLM_TOP10:LLM06", "OWASP_AGENTIC:ASI02", "MITRE_ATLAS"])
 def check_excessive_agency(agent: dict) -> Finding | None:
     n = _recent_event_types(agent["agent_id"], {"excessive_agency"})
     if n:
@@ -129,13 +133,13 @@ def check_excessive_agency(agent: dict) -> Finding | None:
                        title=f"Excessive agency: {agent.get('name', 'unknown')}",
                        description=f"{n} turn(s) showed excessive tool invocation / spread.",
                        remediation="Constrain the agent's tool set and require approval for sensitive tools.",
-                       compliance_frameworks=["OWASP_LLM_TOP10:LLM06", "OWASP_AGENTIC:T6", "MITRE_ATLAS"])
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM06", "OWASP_AGENTIC:ASI02", "MITRE_ATLAS"])
     return None
 
 
 @rule("unapproved_model", "Unapproved Model",
       "Agent uses a model outside the approved allowlist", "medium", "model",
-      ["NIST_AI_RMF", "OWASP_AGENTIC:T15"])
+      ["NIST_AI_RMF", "OWASP_AGENTIC:ASI04"])
 def check_unapproved_model(agent: dict) -> Finding | None:
     import os
     allow = [m.strip() for m in os.getenv("SPM_APPROVED_MODELS", "").split(",") if m.strip()]
@@ -147,7 +151,7 @@ def check_unapproved_model(agent: dict) -> Finding | None:
                        title=f"Unapproved model: {name}",
                        description=f"Model '{name}' is not in the approved allowlist.",
                        remediation="Restrict to approved models or add this model to SPM_APPROVED_MODELS after review.",
-                       compliance_frameworks=["NIST_AI_RMF", "OWASP_AGENTIC:T15"])
+                       compliance_frameworks=["NIST_AI_RMF", "OWASP_AGENTIC:ASI04"])
     return None
 
 
@@ -233,7 +237,7 @@ def check_knowledge_base_unencrypted(agent: dict) -> Finding | None:
 
 @rule("bedrock_agent_no_guardrail", "Bedrock Agent Without Guardrail",
       "Bedrock Agent has no guardrail associated", "high", "bedrock_agent",
-      ["OWASP_LLM_TOP10:LLM01", "OWASP_AGENTIC:T1", "NIST_AI_RMF"])
+      ["OWASP_LLM_TOP10:LLM01", "OWASP_AGENTIC:ASI01", "NIST_AI_RMF"])
 def check_bedrock_agent_no_guardrail(agent: dict) -> Finding | None:
     cfg = agent.get("config", {})
     if not cfg.get("guardrail_id") and not cfg.get("guardrailConfiguration"):
@@ -241,5 +245,43 @@ def check_bedrock_agent_no_guardrail(agent: dict) -> Finding | None:
                        title=f"Bedrock Agent without guardrail: {agent.get('name', 'unknown')}",
                        description="This Bedrock Agent has no guardrail associated to filter prompts/responses.",
                        remediation="Associate a Bedrock guardrail with the agent alias.",
-                       compliance_frameworks=["OWASP_LLM_TOP10:LLM01", "OWASP_AGENTIC:T1", "NIST_AI_RMF"])
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM01", "OWASP_AGENTIC:ASI01", "NIST_AI_RMF"])
     return None
+
+
+# ------------------------------------------------------------------
+# Agent identity / non-human-identity posture (OWASP Agentic ASI03)
+# ------------------------------------------------------------------
+
+@rule("excessive_agent_privilege", "Excessive Agent Privilege (NHI)",
+      "Agent execution role has admin or wildcard permissions", "high", "*",
+      ["OWASP_AGENTIC:ASI03", "OWASP_LLM_TOP10:LLM06", "NIST_AI_RMF"])
+def check_excessive_agent_privilege(agent: dict) -> Finding | None:
+    import os
+    # Off by default (requires IAM read access). Set SPM_ANALYZE_IDENTITY=true.
+    if os.getenv("SPM_ANALYZE_IDENTITY", "").lower() not in ("1", "true", "yes"):
+        return None
+    role_arn = agent.get("permissions", {}).get("role_arn", "") or agent.get("config", {}).get("role", "")
+    if not role_arn or "role/" not in role_arn:
+        return None
+    try:
+        from spm.engine.identity import analyze_role_privilege
+        admin, wc_action, wc_resource, err = analyze_role_privilege(role_arn)
+    except Exception:
+        return None
+    if err or not (admin or wc_action or wc_resource):
+        return None
+    issues = []
+    if admin:
+        issues.append("AdministratorAccess")
+    if wc_action:
+        issues.append("wildcard actions (*)")
+    if wc_resource:
+        issues.append("wildcard resources (*)")
+    return Finding(
+        agent_id=agent["agent_id"], severity="high", rule_id="excessive_agent_privilege",
+        title=f"Excessive privilege: {agent.get('name', 'unknown')}",
+        description=f"Agent execution role grants {', '.join(issues)}.",
+        remediation="Apply least agency: give the agent its own scoped, time-bound role; remove admin/wildcards.",
+        compliance_frameworks=["OWASP_AGENTIC:ASI03", "OWASP_LLM_TOP10:LLM06", "NIST_AI_RMF"],
+    )

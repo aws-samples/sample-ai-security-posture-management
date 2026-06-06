@@ -235,6 +235,27 @@ Resources:
                 Action:
                   - events:PutEvents
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - guardduty:ListDetectors
+                  - guardduty:ListFindings
+                  - guardduty:GetFindings
+                Resource: '*'
+        - PolicyName: IdentityAnalysis
+          # Read-only inspection of agent execution roles for excessive privilege
+          # (non-human identity posture, OWASP Agentic ASI03).
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListRolePolicies
+                  - iam:GetRolePolicy
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                Resource: '*'
 
   # ============ SPM API Service ============
   SPMAPILogGroup:

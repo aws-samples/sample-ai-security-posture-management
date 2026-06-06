@@ -77,7 +77,32 @@ Scope these to specific guardrail/KB/agent ARNs for least privilege.
    **PII** policy, and **denied topics** for your domain.
 3. Encrypt **knowledge bases** and their vector stores with **customer-managed
    KMS** keys; restrict the KB IAM role to least privilege.
-4. Turn on AI SPM **enforce mode** once detections are validated in monitor mode.
-5. Export findings to **Security Hub** (`SPM_SECURITY_HUB_ENABLED=true`) and
-   route high-severity events to **SNS/EventBridge** for response.
-6. Re-run the **red-team benchmark** to confirm coverage.
+4. Apply **least agency** to agent execution roles — no admin/wildcards; give
+   each agent its own scoped, time-bound identity (enable `SPM_ANALYZE_IDENTITY`
+   to detect violations).
+5. **Network-isolate** Bedrock access via interface VPC endpoints (PrivateLink);
+   keep agents in private subnets.
+6. Turn on AI SPM **enforce mode** once detections are validated in monitor mode.
+7. Export findings to **Security Hub** (`SPM_SECURITY_HUB_ENABLED=true`), ingest
+   **GuardDuty AI Protection** findings (`SPM_GUARDDUTY_ENABLED=true`), and route
+   high-severity events to **SNS/EventBridge**.
+8. Re-run the **red-team benchmark** to confirm coverage.
+
+## Alignment with the AWS SRA for AI
+
+This coverage maps to the
+[AWS Security Reference Architecture (SRA) for AI](https://docs.aws.amazon.com/prescriptive-guidance/latest/security-reference-architecture-generative-ai/gen-ai-sra.html),
+which defines six Bedrock security capabilities:
+
+| AWS SRA for AI capability | AI SPM coverage |
+|---------------------------|-----------------|
+| 1. Secure model inference (IAM, I/O validation) | Guardrails enforcement + injection/PII detectors; key/model posture rules |
+| 2. Secure model customization | Unapproved-model rule (supply chain, ASI04) |
+| 3. Secure access to data (RAG) | Knowledge-base KMS encryption rule; data-exfiltration detector |
+| 4. Secure tool usage | MCP/tool detection; excessive-agency rule (ASI02) |
+| 5. Secure agents | Bedrock-agent guardrail rule; agent identity/NHI rule (ASI03) |
+| 6. Secure AI applications | Logging, Security Hub/GuardDuty/SNS integration, runtime monitoring |
+
+Cross-cutting SRA themes — **logging/monitoring**, **data protection (KMS)**,
+**input/output validation (guardrails)**, **IAM least privilege**, and **network
+isolation** — are each represented by a scanner, rule, or detector above.

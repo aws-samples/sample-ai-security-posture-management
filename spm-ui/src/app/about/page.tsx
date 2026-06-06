@@ -127,8 +127,8 @@ export default function AboutPage() {
 
       {/* Policy Rules */}
       <div>
-        <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-4">Security Rules (23)</p>
-        <p className="text-[11px] text-gray-500 -mt-3 mb-4">10 config/trace · 6 agentic/runtime · 7 Amazon Bedrock posture</p>
+        <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-4">Security Rules (22)</p>
+        <p className="text-[11px] text-gray-500 -mt-3 mb-4">10 config/trace · 6 agentic/runtime · 5 Amazon Bedrock · 1 identity (NHI)</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="bg-white/[0.02] border border-white/[0.06] rounded-2xl p-5">
             <p className="text-[10px] text-blue-400 uppercase tracking-widest mb-3">Config-Based (5)</p>
@@ -217,7 +217,7 @@ export default function AboutPage() {
             { label: "Python Files", value: "17" }, { label: "Lines of Code", value: "1,884" },
             { label: "API Endpoints", value: "24" }, { label: "Policy Rules", value: "10" },
             { label: "UI Pages", value: "8" }, { label: "DynamoDB Tables", value: "4" },
-            { label: "CFN Stacks", value: "2" }, { label: "Policy Rules", value: "23" },
+            { label: "CFN Stacks", value: "2" }, { label: "Policy Rules", value: "22" },
           ].map((s) => (
             <div key={s.label} className="text-center">
               <p className="text-lg font-bold">{s.value}</p>

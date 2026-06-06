@@ -179,6 +179,8 @@ All configuration is via environment variables (12-factor). Key ones:
 | `SPM_APPROVED_MODELS` | _(empty)_ | Comma-separated model allowlist for the `unapproved_model` rule |
 | `SPM_REQUIRE_GUARDRAIL` | _(empty)_ | Set `true` to activate the `missing_guardrail_association` rule |
 | `SPM_SECURITY_HUB_ENABLED` | _(empty)_ | Set `true` to export findings to AWS Security Hub (ASFF) |
+| `SPM_GUARDDUTY_ENABLED` | _(empty)_ | Set `true` to ingest GuardDuty AI Protection findings |
+| `SPM_ANALYZE_IDENTITY` | _(empty)_ | Set `true` to analyze agent execution-role privilege (ASI03; needs IAM read) |
 | `SPM_SNS_TOPIC_ARN` | _(empty)_ | SNS topic for high-severity runtime alerts |
 | `SPM_EVENT_BUS_NAME` | _(empty)_ | EventBridge bus for high-severity runtime events |
 
@@ -212,8 +214,9 @@ Rules are registered plugins (see [Extensibility](#extensibility)) mapped to the
 | `unapproved_model` | Medium | NIST, Agentic T15 |
 | `missing_guardrail_association` | Medium | OWASP LLM01, NIST |
 
-Plus **7 Amazon Bedrock posture rules** (guardrail strength/PII, knowledge-base
-encryption, model-invocation logging, agent guardrail association) — see
+Plus **5 Amazon Bedrock posture rules** (guardrail strength/PII, knowledge-base
+encryption, model-invocation logging, agent guardrail association) and an
+**agent identity / NHI** rule (`excessive_agent_privilege`, ASI03) — see
 [docs/bedrock-security.md](docs/bedrock-security.md). Inspect all loaded rules at
 `GET /spm/api/plugins`.
 
@@ -251,8 +254,16 @@ ensemble.
 
 High-severity findings and runtime events fan out to pluggable sinks for AI
 Detection & Response: **AWS Security Hub** (ASFF `BatchImportFindings`),
-**Amazon SNS**, and **Amazon EventBridge**. Enable via the corresponding env
-vars and trigger a sync with `POST /spm/api/integrations/security-hub/sync`.
+**Amazon SNS**, and **Amazon EventBridge**. AI SPM also **ingests Amazon
+GuardDuty AI Protection** findings (guardrail removal, disabled invocation
+logging, anomalous Bedrock usage) via `POST /spm/api/integrations/guardduty/ingest`
+(`SPM_GUARDDUTY_ENABLED=true`), and can analyze **agent execution-role privilege**
+for non-human-identity risk (ASI03, `SPM_ANALYZE_IDENTITY=true`).
+
+Standards alignment: rules are tagged to **OWASP LLM Top 10 (2025)**, the
+**OWASP Top 10 for Agentic Applications (ASI01–ASI10, Dec 2025)**, **NIST AI
+RMF**, **MITRE ATLAS**, and mapped to the **AWS SRA for AI**
+([docs/bedrock-security.md](docs/bedrock-security.md)).
 
 ## Extensibility
 

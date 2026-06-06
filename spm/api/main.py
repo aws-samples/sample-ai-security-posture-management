@@ -21,6 +21,9 @@ tracer = trace.get_tracer("spm.api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_tracing("spm-api")
+    # Load built-in + third-party (SPM_PLUGINS) extensions
+    from spm.plugins import load_plugins
+    load_plugins()
     # Start real-time monitoring loop
     import asyncio
     from spm.defender.monitor import monitor_loop, stop
@@ -517,6 +520,64 @@ async def run_correlation(req: Request):
 
 
 # ============================================================
+# Govern — Risk Scoring
+# ============================================================
+
+@app.post("/spm/api/risk/score")
+async def risk_score(req: Request):
+    """Recompute quantitative risk scores (0-100) for all agents."""
+    await get_current_user(req)
+    from spm.engine.risk_scoring import score_all
+    return await score_all()
+
+
+# ============================================================
+# Extensibility — Plugin introspection
+# ============================================================
+
+@app.get("/spm/api/plugins")
+async def list_plugins(req: Request):
+    """List all registered extension points (detectors, rules, scanners, sinks)."""
+    await get_current_user(req)
+    from spm.plugins import load_plugins
+    from spm.core.registry import DETECTORS, RULES, SCANNERS, SINKS
+    load_plugins()
+    return {
+        "detectors": [{"id": d.id, "phases": sorted(d.phases), "enabled": d.enabled,
+                       "description": d.description} for d in DETECTORS.values()],
+        "rules": [{"id": r.rule_id, "name": r.name, "severity": r.severity,
+                   "applies_to": r.applies_to, "compliance": r.compliance,
+                   "enabled": r.enabled} for r in RULES.values()],
+        "scanners": [{"id": s.id, "source": s.source, "enabled": s.enabled,
+                      "description": s.description} for s in SCANNERS.values()],
+        "sinks": [{"id": s.id, "kind": s.kind, "enabled": s.enabled,
+                   "description": s.description} for s in SINKS.values()],
+    }
+
+
+# ============================================================
+# AIDR — Integrations (Security Hub / SNS / EventBridge)
+# ============================================================
+
+@app.get("/spm/api/integrations")
+async def list_integrations(req: Request):
+    await get_current_user(req)
+    from spm.plugins import load_plugins
+    from spm.core.registry import SINKS
+    load_plugins()
+    return {"sinks": [{"id": s.id, "kind": s.kind, "description": s.description} for s in SINKS.values()]}
+
+
+@app.post("/spm/api/integrations/security-hub/sync")
+async def sync_security_hub(req: Request):
+    """Export current findings to AWS Security Hub (ASFF) and any other findings sinks."""
+    await get_current_user(req)
+    from spm.integrations import dispatch_findings
+    findings = db.list_findings(limit=500)
+    return {"findings": len(findings), "results": dispatch_findings(findings)}
+
+
+# ============================================================
 # Defend — Transparent LLM Proxy (OpenAI-compatible)
 # Agents call this instead of LiteLLM directly.
 # Intercepts, scans, blocks/logs, then forwards to LiteLLM.
@@ -524,73 +585,60 @@ async def run_correlation(req: Request):
 
 @app.post("/v1/chat/completions")
 async def proxy_chat_completions(request: Request):
-    """Transparent LLM proxy with full threat detection suite."""
+    """Transparent LLM proxy with pluggable threat detection.
+
+    Runs every registered detector (pre phase before the LLM, post phase after),
+    logs runtime events, optionally blocks in enforce mode, fans high-severity
+    events out to AIDR sinks, then forwards to LiteLLM. New detectors registered
+    via SPM_PLUGINS are picked up automatically — no changes here.
+    """
     import httpx
+    from spm.plugins import load_plugins
+    from spm.core.registry import DetectionContext, detectors_for
     from spm.defender.litellm_callback import SPMCallback
-    from spm.defender.advanced_detectors import (
-        classify_injection_semantic, scan_response_for_pii,
-        detect_memory_poisoning, detect_mcp_tool_usage,
-    )
     from spm.core.models import RuntimeEvent
+    load_plugins()
 
     body = await request.json()
     auth = request.headers.get("Authorization", "")
     api_key = auth.replace("Bearer ", "") if auth else "unknown"
     agent_id = f"litellm-key-{api_key[-8:]}" if len(api_key) > 8 else "unknown"
-
     messages = body.get("messages", [])
     prompt_text = " ".join(m.get("content", "") for m in messages if isinstance(m, dict))
     model = body.get("model", "unknown")
+    mode = SPMCallback()._get_mode()
 
-    cb = SPMCallback()
-    mode = cb._get_mode()
-    threats = []
+    async def run_phase(phase: str, response_text: str = ""):
+        ctx = DetectionContext(phase=phase, agent_id=agent_id, api_key=api_key, model=model,
+                               mode=mode, messages=messages, prompt_text=prompt_text,
+                               response_text=response_text)
+        found = []
+        for spec in detectors_for(phase):
+            try:
+                dets = await spec.fn(ctx) if spec.is_async else spec.fn(ctx)
+            except Exception as e:
+                print(f"[SPM] detector {spec.id} error: {e}")
+                dets = []
+            found.extend(dets or [])
+        return found
 
-    # 1. Regex injection check (fast)
-    injection = cb._check_prompt_injection(prompt_text)
-    if injection:
-        threats.append(("prompt_injection", "critical", {"pattern": injection}))
+    def log_detections(dets, phase, blocked):
+        for d in dets:
+            ev = RuntimeEvent(agent_id=agent_id, event_type=d.event_type, severity=d.severity,
+                              details={**d.details, "model": model, "mode": mode,
+                                       "phase": phase, "blocked": blocked,
+                                       "prompt_preview": prompt_text[:200]})
+            db.put_runtime_event(asdict(ev))
 
-    # 2. Semantic injection check (Bedrock-powered, if regex missed)
-    if not injection and len(prompt_text) > 20:
-        try:
-            is_inj, reason = await classify_injection_semantic(prompt_text)
-            if is_inj:
-                injection = reason
-                threats.append(("semantic_injection", "critical", {"reason": reason}))
-        except Exception:
-            pass
+    # PRE-phase detection
+    pre = await run_phase("pre")
+    pre_block = mode == "enforce" and any(d.block for d in pre)
+    log_detections(pre, "pre", pre_block)
+    _emit_alert_events(pre, agent_id, model)
+    if pre_block:
+        return _blocked_response(next(d for d in pre if d.block).event_type, model)
 
-    # 3. Memory poisoning check
-    memory_issues = detect_memory_poisoning(messages)
-    for issue in memory_issues:
-        threats.append(("memory_poisoning", "high", issue))
-
-    # 4. Rate limiting
-    rate_limited = cb._check_rate_limit(api_key)
-    if rate_limited:
-        threats.append(("rate_limit", "high", {"api_key": api_key[-4:]}))
-
-    # Log all threats
-    for event_type, severity, details in threats:
-        event = RuntimeEvent(
-            agent_id=agent_id, event_type=event_type, severity=severity,
-            details={**details, "model": model, "mode": mode, "blocked": mode == "enforce",
-                     "prompt_preview": prompt_text[:200]},
-        )
-        db.put_runtime_event(asdict(event))
-
-    # Block in enforce mode if any critical/high threat
-    if mode == "enforce" and threats:
-        top_threat = threats[0]
-        return {"error": {"message": f"Request blocked by AI SPM: {top_threat[0]}",
-                          "type": "spm_blocked", "code": top_threat[0]},
-                "id": "spm-blocked", "object": "error", "model": model,
-                "choices": [{"message": {"role": "assistant",
-                             "content": f"⚠️ This request was blocked by AI SPM: {top_threat[0]} detected."},
-                             "index": 0, "finish_reason": "content_filter"}]}
-
-    # Forward to real LiteLLM
+    # Forward to the real LiteLLM proxy
     litellm_url = os.getenv("LITELLM_URL", "http://localhost:4000")
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
@@ -599,39 +647,27 @@ async def proxy_chat_completions(request: Request):
             json=body,
         )
 
-    # Post-response checks
     try:
         resp_json = resp.json()
         response_text = resp_json.get("choices", [{}])[0].get("message", {}).get("content", "")
         usage = resp_json.get("usage", {})
 
-        # 5. Data exfiltration check on response
-        pii_detections = scan_response_for_pii(response_text)
-        if pii_detections:
-            event = RuntimeEvent(
-                agent_id=agent_id, event_type="data_exfiltration", severity="critical",
-                details={"pii_types": pii_detections, "model": model, "mode": mode},
-            )
-            db.put_runtime_event(asdict(event))
+        # POST-phase detection
+        post = await run_phase("post", response_text=response_text)
+        post_block = mode == "enforce" and any(d.block for d in post)
+        log_detections(post, "post", post_block)
+        _emit_alert_events(post, agent_id, model)
+        if post_block:
+            return _blocked_response(next(d for d in post if d.block).event_type, model)
 
-        # 6. MCP tool usage check
-        mcp_detections = detect_mcp_tool_usage(messages, response_text)
-        for det in mcp_detections:
-            event = RuntimeEvent(
-                agent_id=agent_id, event_type="mcp_tool_usage", severity="medium",
-                details={**det, "model": model},
-            )
-            db.put_runtime_event(asdict(event))
-
-        # Log the call
+        # Log the successful call
         event = RuntimeEvent(
             agent_id=agent_id, event_type="llm_call", severity="low",
             details={"model": model, "prompt_tokens": usage.get("prompt_tokens", 0),
                      "completion_tokens": usage.get("completion_tokens", 0),
                      "total_tokens": usage.get("total_tokens", 0),
-                     "injection_scanned": True,
-                     "pii_detected": len(pii_detections) > 0,
-                     **({"threats": [t[0] for t in threats]} if threats else {})},
+                     "detectors_run": True,
+                     **({"threats": [d.event_type for d in (pre + post)]} if (pre or post) else {})},
         )
         db.put_runtime_event(asdict(event))
         return resp_json
@@ -662,3 +698,26 @@ def _count_by(items: list[dict], key: str) -> dict[str, int]:
         v = i.get(key, "unknown")
         counts[v] = counts.get(v, 0) + 1
     return counts
+
+
+def _blocked_response(reason: str, model: str) -> dict:
+    """OpenAI-compatible content-filter response used when enforce mode blocks."""
+    return {"error": {"message": f"Request blocked by AI SPM: {reason}",
+                      "type": "spm_blocked", "code": reason},
+            "id": "spm-blocked", "object": "error", "model": model,
+            "choices": [{"message": {"role": "assistant",
+                         "content": f"⚠️ This request was blocked by AI SPM: {reason} detected."},
+                         "index": 0, "finish_reason": "content_filter"}]}
+
+
+def _emit_alert_events(detections, agent_id: str, model: str) -> None:
+    """Fan high/critical detections out to AIDR event sinks (best-effort)."""
+    try:
+        alerts = [{"agent_id": agent_id, "event_type": d.event_type, "severity": d.severity,
+                   "details": {**d.details, "model": model}}
+                  for d in detections if d.severity in ("critical", "high")]
+        if alerts:
+            from spm.integrations import dispatch_events
+            dispatch_events(alerts)
+    except Exception:
+        pass

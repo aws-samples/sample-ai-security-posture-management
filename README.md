@@ -174,6 +174,13 @@ All configuration is via environment variables (12-factor). Key ones:
 | `SPM_MONITORED_SERVICES` | _(empty)_ | Comma-separated service-name filter for new-dependency alerts |
 | `SPM_CLASSIFIER_MODEL_ID` | `us.anthropic.claude-3-5-haiku-20241022-v1:0` | Bedrock model for semantic injection detection |
 | `SPM_POLL_INTERVAL_SEC` | `10` | Runtime monitor poll interval |
+| `SPM_PLUGINS` | _(empty)_ | Comma-separated import paths of third-party plugin modules (detectors/rules/scanners/sinks) |
+| `SPM_BEDROCK_GUARDRAIL_ID` / `SPM_BEDROCK_GUARDRAIL_VERSION` | _(empty)_ / `DRAFT` | Enable Amazon Bedrock Guardrails enforcement in the proxy |
+| `SPM_APPROVED_MODELS` | _(empty)_ | Comma-separated model allowlist for the `unapproved_model` rule |
+| `SPM_REQUIRE_GUARDRAIL` | _(empty)_ | Set `true` to activate the `missing_guardrail_association` rule |
+| `SPM_SECURITY_HUB_ENABLED` | _(empty)_ | Set `true` to export findings to AWS Security Hub (ASFF) |
+| `SPM_SNS_TOPIC_ARN` | _(empty)_ | SNS topic for high-severity runtime alerts |
+| `SPM_EVENT_BUS_NAME` | _(empty)_ | EventBridge bus for high-severity runtime events |
 
 Environment-specific knowledge (which workflows you expect and their allowed
 downstream dependencies) is optional and supplied via `SPM_CONFIG_FILE`. See
@@ -182,18 +189,69 @@ empty so discovery works against any platform without configuration.
 
 ## Govern rules
 
+Rules are registered plugins (see [Extensibility](#extensibility)) mapped to the
+**OWASP LLM Top 10 (2025)**, **OWASP Agentic AI threats**, **NIST AI RMF**, and
+**MITRE ATLAS**.
+
 | Rule | Severity | Frameworks |
 |------|----------|-----------|
-| `overprivileged_key` | High | OWASP, NIST |
-| `unrestricted_model_access` | High | NIST, MITRE |
-| `missing_guardrails` | Medium | OWASP |
-| `excessive_spend` | Medium | NIST |
+| `overprivileged_key` | High | OWASP LLM06, Agentic T6, NIST |
+| `unrestricted_model_access` | High | OWASP LLM06, MITRE, NIST |
+| `missing_guardrails` | Medium | OWASP LLM10, NIST |
+| `excessive_spend` | Medium | OWASP LLM10, NIST |
 | `stale_agent` | Low | NIST |
-| `high_retry_rate` | High | OWASP, NIST |
+| `high_retry_rate` | High | OWASP LLM10, NIST |
 | `latency_anomaly` | Medium | MITRE |
-| `excessive_llm_calls` | Medium | OWASP, MITRE |
+| `excessive_llm_calls` | Medium | OWASP LLM06, Agentic T6, MITRE |
 | `missing_trace_propagation` | Low | NIST |
-| `unexpected_dependency` | High | MITRE, OWASP |
+| `unexpected_dependency` | High | Agentic T2, MITRE, OWASP LLM06 |
+| `jailbreak_activity` | High | OWASP LLM01, Agentic T1, MITRE |
+| `sensitive_data_exposure` | Critical | OWASP LLM02, MITRE, NIST |
+| `insecure_output_handling` | High | OWASP LLM05, MITRE |
+| `excessive_agency` | High | OWASP LLM06, Agentic T6, MITRE |
+| `unapproved_model` | Medium | NIST, Agentic T15 |
+| `missing_guardrail_association` | Medium | OWASP LLM01, NIST |
+
+## Runtime detectors (Defend)
+
+Detectors are also plugins. Built-ins: regex + Bedrock-semantic **prompt
+injection**, **jailbreak**, **system-prompt extraction**, **memory poisoning**,
+**rate limiting**, **PII/secret exfiltration**, **insecure output handling**,
+**MCP/tool usage**, **excessive agency**, and **Amazon Bedrock Guardrails**
+(content filters, denied topics, PII redaction). Run in **monitor** or
+**enforce** (inline blocking) mode.
+
+## AIDR integrations
+
+High-severity findings and runtime events fan out to pluggable sinks for AI
+Detection & Response: **AWS Security Hub** (ASFF `BatchImportFindings`),
+**Amazon SNS**, and **Amazon EventBridge**. Enable via the corresponding env
+vars and trigger a sync with `POST /spm/api/integrations/security-hub/sync`.
+
+## Extensibility
+
+AI SPM is extensible by design. Four decorator-based registries — **detectors**
+(Defend), **rules** (Govern), **scanners** (Observe), and **sinks** (AIDR) — let
+you add capabilities without modifying core code. Drop a module with your
+decorated function anywhere importable and point `SPM_PLUGINS` at it:
+
+```python
+from spm.core.registry import detector, Detection
+
+@detector("acme.secret_scanner", phases=("post",))
+def scan_secrets(ctx):
+    if "BEGIN RSA PRIVATE KEY" in ctx.response_text:
+        return [Detection("private_key_leak", "critical", {"model": ctx.model}, block=True)]
+    return []
+```
+
+```bash
+SPM_PLUGINS="acme.spm_plugins" uvicorn spm.api.main:app
+```
+
+Inspect everything that's loaded at `GET /spm/api/plugins`. Full guide:
+[docs/extending.md](docs/extending.md). How it stacks up against commercial AI
+agent security platforms: [docs/comparison.md](docs/comparison.md).
 
 ## Security
 

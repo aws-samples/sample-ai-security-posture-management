@@ -206,9 +206,29 @@ Resources:
                 Action:
                   - bedrock:ListAgents
                   - bedrock:InvokeModel
+                  - bedrock:ApplyGuardrail
                   - sagemaker:ListEndpoints
                   - lambda:ListFunctions
                   - cloudtrail:LookupEvents
+                Resource: '*'
+        - PolicyName: AidrIntegrations
+          # AI Detection & Response: export findings to Security Hub and emit
+          # high-severity alerts to SNS / EventBridge. Scope these to your
+          # specific topic / bus / Security Hub ARNs for least privilege.
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - securityhub:BatchImportFindings
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
                 Resource: '*'
 
   # ============ SPM API Service ============

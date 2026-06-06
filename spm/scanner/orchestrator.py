@@ -1,14 +1,14 @@
 """Unified discovery orchestrator — runs all scanners, computes deltas, updates inventory."""
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 
 from opentelemetry import trace
 
 from spm.core import db
-from spm.scanner import litellm_scanner, temporal_scanner, xray_scanner
-from spm.scanner import aws_platform_scanner
+from spm.core.registry import SCANNERS
+from spm.plugins import load_plugins
+from spm.scanner import xray_scanner
 
 tracer = trace.get_tracer("spm.scanner.orchestrator")
 
@@ -20,36 +20,42 @@ async def run_scan() -> dict:
     """
     with tracer.start_as_current_span("spm.scan.orchestrate"):
         scan_start = datetime.now(timezone.utc).isoformat()
+        load_plugins()
 
-        # Run LiteLLM + Temporal in parallel (async), X-Ray is sync
-        litellm_items, temporal_items = await asyncio.gather(
-            litellm_scanner.scan(),
-            temporal_scanner.scan(),
-        )
+        # Run all registered inventory scanners (built-ins + any SPM_PLUGINS).
+        all_items: list[dict] = []
+        per_source: dict[str, int] = {}
+        for spec in SCANNERS.values():
+            if not spec.enabled:
+                continue
+            try:
+                items = await spec.fn() if spec.is_async else spec.fn()
+            except Exception as e:
+                print(f"[SPM] scanner {spec.id} error: {e}")
+                continue
+            items = items or []
+            all_items.extend(items)
+            per_source[spec.source] = per_source.get(spec.source, 0) + len(items)
+
+        # X-Ray enrichment (topology + per-agent behavioral baselines).
         xray_data = xray_scanner.scan()
-        aws_items = aws_platform_scanner.scan()
-
-        # Enrich temporal items with X-Ray baselines
         baselines = xray_data.get("baselines", {})
-        for item in temporal_items:
+        topology = xray_data.get("topology", {})
+        edges = topology.get("edges", [])
+
+        for item in all_items:
+            if item.get("source") != "temporal":
+                continue
             wf_name = item.get("name", "")
-            # Match by service name patterns
             for svc_name, baseline in baselines.items():
                 if wf_name.lower().replace("workflow", "") in svc_name.lower():
                     item["behavioral_baseline"] = baseline
                     break
-
-        # Enrich temporal items with X-Ray topology (dependencies)
-        topology = xray_data.get("topology", {})
-        edges = topology.get("edges", [])
-        for item in temporal_items:
-            name = item.get("name", "")
-            deps = [e["target"] for e in edges if name.lower().replace("workflow", "") in e.get("source", "").lower()]
+            deps = [e["target"] for e in edges
+                    if wf_name.lower().replace("workflow", "") in e.get("source", "").lower()]
             if deps:
                 item["dependencies"] = deps
 
-        # Merge all discovered items
-        all_items = litellm_items + temporal_items + aws_items
         new_items_map = {i["agent_id"]: i for i in all_items}
 
         # Load existing inventory for delta computation
@@ -90,9 +96,7 @@ async def run_scan() -> dict:
         summary = {
             "scan_time": scan_start,
             "total_discovered": len(all_items),
-            "litellm_count": len(litellm_items),
-            "temporal_count": len(temporal_items),
-            "aws_platform_count": len(aws_items),
+            "by_source": per_source,
             "topology_nodes": len(topology.get("nodes", [])),
             "topology_edges": len(topology.get("edges", [])),
             "delta": {

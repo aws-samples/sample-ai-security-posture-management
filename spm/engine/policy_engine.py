@@ -12,105 +12,6 @@ from spm.core.models import Finding
 
 tracer = trace.get_tracer("spm.engine.policy")
 
-# ============================================================
-# Rule definitions
-# ============================================================
-
-RULES = [
-    # --- Config-based rules ---
-    {
-        "rule_id": "overprivileged_key",
-        "name": "Overprivileged API Key",
-        "description": "Key has no budget limit or model restrictions",
-        "severity": "high",
-        "compliance": ["OWASP_LLM_TOP10", "NIST_AI_RMF"],
-        "applies_to": "key",
-        "check": "_check_overprivileged_key",
-    },
-    {
-        "rule_id": "missing_guardrails",
-        "name": "Missing Model Guardrails",
-        "description": "Model config lacks max_tokens limits",
-        "severity": "medium",
-        "compliance": ["OWASP_LLM_TOP10"],
-        "applies_to": "model",
-        "check": "_check_missing_guardrails",
-    },
-    {
-        "rule_id": "unrestricted_model_access",
-        "name": "Unrestricted Model Access",
-        "description": "Key can access all models with no allowlist",
-        "severity": "high",
-        "compliance": ["NIST_AI_RMF", "MITRE_ATLAS"],
-        "applies_to": "key",
-        "check": "_check_unrestricted_model_access",
-    },
-    {
-        "rule_id": "excessive_spend",
-        "name": "Excessive Spend",
-        "description": "Key spend exceeds 80% of budget",
-        "severity": "medium",
-        "compliance": ["NIST_AI_RMF"],
-        "applies_to": "key",
-        "check": "_check_excessive_spend",
-    },
-    {
-        "rule_id": "stale_agent",
-        "name": "Stale Agent",
-        "description": "Workflow type not executed in >7 days",
-        "severity": "low",
-        "compliance": ["NIST_AI_RMF"],
-        "applies_to": "workflow",
-        "check": "_check_stale_agent",
-    },
-    # --- Trace-based rules ---
-    {
-        "rule_id": "high_retry_rate",
-        "name": "High Failure/Retry Rate",
-        "description": "Workflow has >10% failure rate",
-        "severity": "high",
-        "compliance": ["OWASP_LLM_TOP10", "NIST_AI_RMF"],
-        "applies_to": "workflow",
-        "check": "_check_high_retry_rate",
-    },
-    {
-        "rule_id": "latency_anomaly",
-        "name": "Latency Anomaly",
-        "description": "Agent execution time significantly exceeds baseline",
-        "severity": "medium",
-        "compliance": ["MITRE_ATLAS"],
-        "applies_to": "workflow",
-        "check": "_check_latency_anomaly",
-    },
-    {
-        "rule_id": "excessive_llm_calls",
-        "name": "Excessive LLM Calls",
-        "description": "Agent making more LLM calls per execution than baseline",
-        "severity": "medium",
-        "compliance": ["OWASP_LLM_TOP10", "MITRE_ATLAS"],
-        "applies_to": "workflow",
-        "check": "_check_excessive_llm_calls",
-    },
-    {
-        "rule_id": "missing_trace_propagation",
-        "name": "Missing Trace Propagation",
-        "description": "Workflow executions lack trace context",
-        "severity": "low",
-        "compliance": ["NIST_AI_RMF"],
-        "applies_to": "workflow",
-        "check": "_check_missing_trace_propagation",
-    },
-    {
-        "rule_id": "unexpected_dependency",
-        "name": "Unexpected Dependency",
-        "description": "Agent calling a service not in expected dependency graph",
-        "severity": "high",
-        "compliance": ["MITRE_ATLAS", "OWASP_LLM_TOP10"],
-        "applies_to": "topology",
-        "check": "_check_unexpected_dependency",
-    },
-]
-
 # Expected dependencies per agent are loaded from spm.core.config (EXPECTED_DEPS).
 # Each entry maps a workflow name to the set of downstream services it is allowed
 # to call. Any service-graph edge to a target outside this set raises an
@@ -278,64 +179,71 @@ def _check_unexpected_dependency(topology: dict, inventory: list[dict]) -> list[
 # Evaluation orchestrator
 # ============================================================
 
-CHECK_FNS = {
-    "overprivileged_key": _check_overprivileged_key,
-    "missing_guardrails": _check_missing_guardrails,
-    "unrestricted_model_access": _check_unrestricted_model_access,
-    "excessive_spend": _check_excessive_spend,
-    "stale_agent": _check_stale_agent,
-    "high_retry_rate": _check_high_retry_rate,
-    "latency_anomaly": _check_latency_anomaly,
-    "excessive_llm_calls": _check_excessive_llm_calls,
-    "missing_trace_propagation": _check_missing_trace_propagation,
-}
+def _applies(applies_to: str, agent_type: str) -> bool:
+    if applies_to == "*" or applies_to == agent_type:
+        return True
+    if applies_to == "workflow" and agent_type in ("workflow", "agent", "orchestrator"):
+        return True
+    return False
 
 
 async def evaluate_all() -> dict:
-    """Run all enabled policy rules against current inventory."""
+    """Run all registered, enabled policy rules against current inventory.
+
+    Rules are sourced from the plugin registry (spm.core.registry.RULES), which
+    is populated by spm.engine.rules and any third-party SPM_PLUGINS modules.
+    """
+    from spm.plugins import load_plugins
+    from spm.core.registry import RULES as RULE_REGISTRY
+    load_plugins()
+
     with tracer.start_as_current_span("spm.engine.evaluate"):
         inventory = db.list_inventory(limit=500)
         agents = [i for i in inventory if i.get("agent_type") != "topology"]
         topo_item = next((i for i in inventory if i.get("agent_id") == "topology-snapshot"), None)
         topology = topo_item.get("config", {}) if topo_item else {}
 
+        rules = [r for r in RULE_REGISTRY.values() if r.enabled]
+        item_rules = [r for r in rules if r.scope == "item"]
+        topo_rules = [r for r in rules if r.scope == "topology"]
+
         new_findings: list[Finding] = []
 
-        # Per-agent rules
+        # Per-agent (item-scope) rules
         for agent in agents:
-            agent_type = agent.get("agent_type", "")
-            for rule in RULES:
-                if rule["applies_to"] == "topology":
+            atype = agent.get("agent_type", "")
+            for r in item_rules:
+                if not _applies(r.applies_to, atype):
                     continue
-                # Match rule to agent type
-                if rule["applies_to"] not in (agent_type, "workflow") and agent_type not in ("agent", "orchestrator"):
-                    if rule["applies_to"] != agent_type:
-                        continue
-                fn = CHECK_FNS.get(rule["rule_id"])
-                if fn:
-                    finding = fn(agent)
-                    if finding:
-                        new_findings.append(finding)
+                try:
+                    finding = r.fn(agent)
+                except Exception as e:
+                    print(f"[SPM] rule {r.rule_id} error: {e}")
+                    finding = None
+                if finding:
+                    new_findings.append(finding)
 
-        # Topology rules
+        # Topology-scope rules
         if topology:
-            topo_findings = _check_unexpected_dependency(topology, agents)
-            new_findings.extend(topo_findings)
+            for r in topo_rules:
+                try:
+                    new_findings.extend(r.fn(topology, agents) or [])
+                except Exception as e:
+                    print(f"[SPM] topology rule {r.rule_id} error: {e}")
 
-        # Persist findings (deduplicate by agent_id + rule_id)
+        # Persist findings (deduplicate by agent_id + rule_id among open findings)
         existing = db.list_findings(limit=500)
         existing_keys = {(f["agent_id"], f["rule_id"]) for f in existing if f.get("status") == "open"}
 
         created = 0
         for f in new_findings:
-            key = (f.agent_id, f.rule_id)
-            if key not in existing_keys:
+            if (f.agent_id, f.rule_id) not in existing_keys:
                 db.put_finding(asdict(f))
                 created += 1
 
         return {
             "evaluated_agents": len(agents),
-            "rules_checked": len(RULES),
+            "rules_checked": len(rules),
             "new_findings": created,
             "total_findings_generated": len(new_findings),
         }

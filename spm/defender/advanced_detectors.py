@@ -19,6 +19,62 @@ CLASSIFIER_MODEL_ID = os.getenv(
     "SPM_CLASSIFIER_MODEL_ID", "us.anthropic.claude-3-5-haiku-20241022-v1:0"
 )
 
+
+# ============================================================
+# Prompt-injection signatures + rate limiting (litellm-free single source)
+# ============================================================
+
+import time
+from collections import defaultdict
+
+INJECTION_PATTERNS = [
+    # Direct instruction override
+    re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.I),
+    re.compile(r"ignore\s+(all\s+|the\s+)?above\s+instructions", re.I),
+    re.compile(r"disregard\s+(all\s+)?prior", re.I),
+    re.compile(r"do\s+anything\s+now", re.I),
+    re.compile(r"jailbreak", re.I),
+    # Role hijacking
+    re.compile(r"you\s+are\s+now\s+(a|an)\s+", re.I),
+    re.compile(r"switch\s+to\s+\w+\s+mode", re.I),
+    re.compile(r"developer\s+mode", re.I),
+    re.compile(r"god\s+mode", re.I),
+    # Prompt leaking
+    re.compile(r"repeat\s+(everything|all|the\s+text)\s+(above|before)", re.I),
+    re.compile(r"(print|output|show|reveal|display)\s+(me\s+)?(your|the)\s+(system\s+prompt|instructions|initial\s+prompt)", re.I),
+    re.compile(r"what\s+(are|were)\s+your\s+(initial|original|system)\s+instructions", re.I),
+    # Token smuggling / encoding
+    re.compile(r"<\|im_start\|>system", re.I),
+    re.compile(r"\[INST\].*\[/INST\]", re.I),
+    re.compile(r"\[SYSTEM\]", re.I),
+    # Indirect injection
+    re.compile(r"override\s*:\s*ignore", re.I),
+    re.compile(r"actually,?\s+(disregard|ignore|forget)", re.I),
+    # Resource abuse
+    re.compile(r"(write|generate)\s+\w*\s*\d{4,}\s+word", re.I),
+]
+
+
+def check_prompt_injection(text: str) -> str | None:
+    """Return the matched injection pattern string, or None."""
+    for pattern in INJECTION_PATTERNS:
+        if pattern.search(text):
+            return pattern.pattern
+    return None
+
+
+_rate_counts: dict[str, list[float]] = defaultdict(list)
+RATE_WINDOW_SEC = 60
+
+
+def check_rate_limit(api_key: str, rpm_limit: int = 60) -> bool:
+    """Sliding-window per-key rate limit. Returns True if over the limit."""
+    now = time.time()
+    window = [t for t in _rate_counts[api_key] if now - t < RATE_WINDOW_SEC]
+    window.append(now)
+    _rate_counts[api_key] = window
+    return len(window) > rpm_limit
+
 # ============================================================
 # Semantic Injection Detection (Bedrock-powered)
 # ============================================================
@@ -202,4 +258,99 @@ def detect_mcp_tool_usage(messages: list[dict], response_text: str) -> list[dict
                 detections.append({"type": "excessive_tool_usage", "tool": tool_name,
                                    "count": _tool_call_counts[tool_name]})
 
+    return detections
+
+
+# ============================================================
+# Jailbreak Detection (known agentic jailbreak signatures)
+# ============================================================
+
+JAILBREAK_PATTERNS = [
+    re.compile(r"\bDAN\b.{0,20}(mode|prompt)", re.I),
+    re.compile(r"do\s+anything\s+now", re.I),
+    re.compile(r"pretend\s+(you|to\s+be)\s+.{0,40}(no|without)\s+(rules|restrictions|filter)", re.I),
+    re.compile(r"(ignore|bypass|disable|turn\s+off)\s+(all\s+)?(your\s+)?(safety|guardrail|content\s+filter|moderation)", re.I),
+    re.compile(r"you\s+have\s+no\s+(restrictions|limitations|rules|filters)", re.I),
+    re.compile(r"\bunfiltered\b.{0,20}(response|mode|answer)", re.I),
+    re.compile(r"hypothetically.{0,40}(without|ignoring)\s+(rules|policy|guidelines)", re.I),
+    re.compile(r"grandma\s+exploit|evil\s+confidant|opposite\s+day", re.I),
+    re.compile(r"(roleplay|role-play)\s+as\s+.{0,40}(hacker|malware|unrestricted)", re.I),
+]
+
+
+def detect_jailbreak(text: str) -> str | None:
+    """Return the matched jailbreak pattern, or None."""
+    for pattern in JAILBREAK_PATTERNS:
+        if pattern.search(text):
+            return pattern.pattern
+    return None
+
+
+# ============================================================
+# System-Prompt Extraction / Leakage Detection
+# ============================================================
+
+SYSTEM_PROMPT_EXTRACTION_PATTERNS = [
+    re.compile(r"(repeat|print|output|reveal|show|display|echo)\s+(me\s+)?(your|the)\s+(system\s+prompt|instructions|initial\s+prompt|rules)", re.I),
+    re.compile(r"what\s+(are|were)\s+your\s+(initial|original|system)\s+instructions", re.I),
+    re.compile(r"everything\s+(above|before)\s+this\s+(message|line)", re.I),
+    re.compile(r"verbatim.{0,20}(instructions|system\s+prompt)", re.I),
+    re.compile(r"(begin|start)\s+with\s+the\s+words?\s+['\"]?you\s+are", re.I),
+]
+
+
+def detect_system_prompt_extraction(text: str) -> str | None:
+    for pattern in SYSTEM_PROMPT_EXTRACTION_PATTERNS:
+        if pattern.search(text):
+            return pattern.pattern
+    return None
+
+
+# ============================================================
+# Insecure Output Handling Detection (OWASP LLM05)
+# ============================================================
+# Flags model output that, if rendered or executed downstream, is dangerous:
+# scripts, data: URIs, SSRF-style links, or markdown image exfiltration.
+
+INSECURE_OUTPUT_PATTERNS = {
+    "script_injection": re.compile(r"<script[\s>]|onerror\s*=|javascript:", re.I),
+    "iframe_injection": re.compile(r"<iframe[\s>]", re.I),
+    "markdown_image_exfil": re.compile(r"!\[[^\]]*\]\(https?://[^)]*\?[^)]*=", re.I),
+    "data_uri": re.compile(r"data:text/html|data:application", re.I),
+    "shell_command": re.compile(r"(rm\s+-rf\s+/|curl\s+[^|]*\|\s*(sh|bash)|wget\s+[^|]*\|\s*(sh|bash))", re.I),
+    "sql_mutation": re.compile(r"\b(DROP|DELETE|TRUNCATE|ALTER)\s+(TABLE|DATABASE)\b", re.I),
+}
+
+
+def detect_insecure_output(response_text: str) -> list[dict]:
+    """Detect dangerous constructs in an LLM response. Returns a list of detections."""
+    detections = []
+    for kind, pattern in INSECURE_OUTPUT_PATTERNS.items():
+        if pattern.search(response_text):
+            detections.append({"type": kind})
+    return detections
+
+
+# ============================================================
+# Excessive Agency Detection (OWASP LLM06 / Agentic)
+# ============================================================
+
+def detect_excessive_agency(messages: list[dict], response_text: str,
+                            tool_call_threshold: int = 8,
+                            distinct_tool_threshold: int = 5) -> list[dict]:
+    """Flag signs of an agent doing more than it should in a single turn:
+    many tool invocations or a wide spread of distinct tools.
+    """
+    detections = []
+    text = " ".join(m.get("content", "") for m in messages if isinstance(m, dict)) + " " + response_text
+    tools = []
+    for pattern in MCP_TOOL_PATTERNS:
+        tools.extend(m.group(1).strip() for m in pattern.finditer(text))
+    if tools:
+        if len(tools) >= tool_call_threshold:
+            detections.append({"type": "high_tool_call_volume", "calls": len(tools)})
+        distinct = set(tools)
+        if len(distinct) >= distinct_tool_threshold:
+            detections.append({"type": "wide_tool_spread", "distinct_tools": len(distinct),
+                               "tools": list(distinct)[:10]})
     return detections

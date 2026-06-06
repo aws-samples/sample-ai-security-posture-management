@@ -127,8 +127,8 @@ export default function AboutPage() {
 
       {/* Policy Rules */}
       <div>
-        <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-4">Security Rules (10)</p>
-        <div className="grid grid-cols-2 gap-3">
+        <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-4">Security Rules (16)</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="bg-white/[0.02] border border-white/[0.06] rounded-2xl p-5">
             <p className="text-[10px] text-blue-400 uppercase tracking-widest mb-3">Config-Based (5)</p>
             {[
@@ -169,6 +169,27 @@ export default function AboutPage() {
               </div>
             ))}
           </div>
+          <div className="bg-white/[0.02] border border-white/[0.06] rounded-2xl p-5">
+            <p className="text-[10px] text-red-400 uppercase tracking-widest mb-3">Agentic / Runtime (6)</p>
+            {[
+              { rule: "sensitive_data_exposure", sev: "CRIT", desc: "PII/secret exfiltration" },
+              { rule: "jailbreak_activity", sev: "HIGH", desc: "Jailbreak attempts" },
+              { rule: "insecure_output_handling", sev: "HIGH", desc: "Unsafe output (scripts/links)" },
+              { rule: "excessive_agency", sev: "HIGH", desc: "Too many / wide tool use" },
+              { rule: "unapproved_model", sev: "MED", desc: "Model outside allowlist" },
+              { rule: "missing_guardrail_association", sev: "MED", desc: "No Bedrock guardrail" },
+            ].map((r) => (
+              <div key={r.rule} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
+                <div>
+                  <p className="text-xs font-medium font-mono">{r.rule}</p>
+                  <p className="text-[10px] text-gray-600">{r.desc}</p>
+                </div>
+                <span className={`text-[9px] px-2 py-0.5 rounded-full font-medium ${
+                  r.sev === "CRIT" ? "bg-red-500/10 text-red-400" : r.sev === "HIGH" ? "bg-orange-500/10 text-orange-400" : "bg-yellow-500/10 text-yellow-400"
+                }`}>{r.sev}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -195,7 +216,7 @@ export default function AboutPage() {
             { label: "Python Files", value: "17" }, { label: "Lines of Code", value: "1,884" },
             { label: "API Endpoints", value: "24" }, { label: "Policy Rules", value: "10" },
             { label: "UI Pages", value: "8" }, { label: "DynamoDB Tables", value: "4" },
-            { label: "CFN Stacks", value: "2" }, { label: "Injection Patterns", value: "9" },
+            { label: "CFN Stacks", value: "2" }, { label: "Policy Rules", value: "16" },
           ].map((s) => (
             <div key={s.label} className="text-center">
               <p className="text-lg font-bold">{s.value}</p>

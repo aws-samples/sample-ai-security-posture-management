@@ -351,4 +351,4 @@ aws cloudformation delete-stack --stack-name ai-spm-platform --region "$AWS_REGI
 
 ## License
 
-This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.
+This library is licensed under the Apache-2.0 License. See the [LICENSE](LICENSE) file.

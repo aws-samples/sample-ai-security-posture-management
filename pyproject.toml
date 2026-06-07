@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "AI Security Posture Management (Observe, Govern, Defend) for LiteLLM + Temporal + X-Ray AI platforms on AWS"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT-0" }
+license = { text = "Apache-2.0" }
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn>=0.32.0",

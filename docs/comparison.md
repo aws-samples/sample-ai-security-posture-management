@@ -54,7 +54,7 @@ This project targets the **AWS-native, code-first agent** slice of that space
 | Multi-agent / drift monitoring | ✅ | ⚠️ session drift + attack-chain correlation (lighter) | They lead |
 | Endpoint / device coverage | ✅ | ❌ | They lead |
 | Enterprise maturity (analyst/compliance/SLA/support) | ✅ | ❌ sample code | They lead |
-| **Open source & self-hostable** | ❌ | ✅ MIT-0, runs in your account | **We lead** |
+| **Open source & self-hostable** | ❌ | ✅ Apache-2.0, runs in your account | **We lead** |
 | **Extensible by design (plugins)** | ⚠️ vendor-defined | ✅ detector/rule/scanner/sink registries + `SPM_PLUGINS` | **We lead** |
 | **Transparent, auditable detection** | ❌ proprietary | ✅ readable rules mapped to frameworks | **We lead** |
 | **No vendor lock-in / OSS ensemble** | ❌ | ✅ optional OSS detectors | **We lead** |
@@ -63,7 +63,7 @@ This project targets the **AWS-native, code-first agent** slice of that space
 
 ## Where this project genuinely differentiates
 
-1. **Open source (MIT-0), 100% in-account.** No SaaS overlay; data never leaves
+1. **Open source (Apache-2.0), 100% in-account.** No SaaS overlay; data never leaves
    the customer's account/region. Strong for regulated/sovereign/air-gapped use.
 2. **Extensible by design.** Add detectors, rules, scanners, and integrations as
    drop-in plugins via `SPM_PLUGINS` — including for **other platforms** — with

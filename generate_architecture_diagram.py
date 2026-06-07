@@ -100,14 +100,16 @@ with Diagram(
                 scanner_temporal = ECS(lab("Temporal Scanner"))
                 scanner_xray = ECS(lab("X-Ray Scanner"))
                 scanner_bedrock = ECS(lab("Bedrock Scanner"))
+                scanner_agentcore = ECS(lab("AgentCore Scanner"))
 
             with Cluster("Govern\nOWASP • NIST AI RMF • MITRE ATLAS", graph_attr=cl("#fffbeb", "#b45309", "#fcd34d")):
-                policy_engine = ECS(lab("Policy Engine\n22 Rules + Risk Score"))
+                policy_engine = ECS(lab("Policy Engine\n26 Rules + Risk Score"))
 
             with Cluster("Defend\nBlock injection & data exfil in real time", graph_attr=cl("#fef2f2", "#dc2626", "#fca5a5")):
                 callback = ECS(lab("LiteLLM Callback\n+ Guardrails"))
                 trace_analyzer = ECS(lab("Trace Analyzer"))
-                alert_engine = ECS(lab("Alert Correlation"))
+                intent_engine = ECS(lab("Intent Engine\n(build→runtime)"))
+                guardian = ECS(lab("Guardian\n(auto-response)"))
 
             spm_api = Fargate(lab("SPM API :8001"))
             spm_ui = Fargate(lab("SPM UI :3001"))
@@ -144,6 +146,7 @@ with Diagram(
     scanner_temporal >> Edge(color="#a855f7", label="workflows\nactivities") >> temporal
     scanner_xray >> Edge(color="#10b981", label="traces\ntopology") >> xray
     scanner_bedrock >> Edge(color="#16a34a", label="guardrails\nKB · logging") >> bedrock
+    scanner_agentcore >> Edge(color="#16a34a", label="runtimes\ngateways") >> bedrock
 
     # Govern
     policy_engine >> Edge(color="#f59e0b") >> ddb_findings
@@ -152,7 +155,8 @@ with Diagram(
     callback >> Edge(color="#ef4444", label="intercept") >> litellm
     callback >> Edge(color="#ef4444", style="dashed", label="ApplyGuardrail") >> bedrock
     trace_analyzer >> Edge(color="#ef4444") >> xray
-    alert_engine >> Edge(color="#ef4444") >> ddb_runtime
+    intent_engine >> Edge(color="#ef4444", style="dashed", label="correlate") >> ddb_inventory
+    guardian >> Edge(color="#ef4444") >> ddb_runtime
 
     # SPM API to data stores
     spm_api >> Edge(color="#94a3b8") >> ddb_inventory

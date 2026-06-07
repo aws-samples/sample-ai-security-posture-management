@@ -181,6 +181,9 @@ All configuration is via environment variables (12-factor). Key ones:
 | `SPM_SECURITY_HUB_ENABLED` | _(empty)_ | Set `true` to export findings to AWS Security Hub (ASFF) |
 | `SPM_GUARDDUTY_ENABLED` | _(empty)_ | Set `true` to ingest GuardDuty AI Protection findings |
 | `SPM_ANALYZE_IDENTITY` | _(empty)_ | Set `true` to analyze agent execution-role privilege (ASI03; needs IAM read) |
+| `SPM_GUARDIAN_MODE` | `off` | Guardian autonomous response: `off` / `recommend` / `auto` |
+| `SPM_INTENT_LLM` | _(empty)_ | Set `true` to enable the Bedrock intent-alignment classifier |
+| `SPM_INTENT_BASELINE_FACTOR` | `3.0` | Token-volume multiplier over baseline that flags behavioral drift |
 | `SPM_SNS_TOPIC_ARN` | _(empty)_ | SNS topic for high-severity runtime alerts |
 | `SPM_EVENT_BUS_NAME` | _(empty)_ | EventBridge bus for high-severity runtime events |
 
@@ -234,11 +237,30 @@ with `pip install "ai-spm[security]"`: ProtectAI **LLM Guard** (ML
 prompt-injection + secrets) and Microsoft **Presidio** (PII). These register
 automatically when installed and no-op when not.
 
+### Intent-based detection + build-to-runtime correlation
+
+The `intent_alignment` detector infers whether an agent's **runtime behavior**
+matches how it was **built/configured**: it correlates the model, tools, and
+token usage seen at runtime against the agent's inventory record (sanctioned
+models, expected dependencies, behavioral baseline) and tracks per-session
+**intent/behavioral drift** (new models/tools appearing mid-session). An optional
+Bedrock classifier (`SPM_INTENT_LLM=true`) judges whether an agent's action
+summary aligns with its declared purpose.
+
+### Guardian — autonomous graduated response
+
+The Guardian orchestrator (`POST /spm/api/guardian/run`, gated by
+`SPM_GUARDIAN_MODE` = `off` | `recommend` | `auto`) takes recent high/critical
+events and applies a **proportional** response — alert → block → contain
+(quarantine workflow / revoke model access) — executing via the existing
+remediations and writing an audited `guardian_action` trail.
+
 ## Deep Amazon Bedrock security
 
 A dedicated Bedrock scanner discovers **Guardrails** (filter strength, PII,
 denied topics), **Knowledge Bases** (KMS encryption), **model-invocation
-logging**, and **Bedrock Agents**, with seven Bedrock-specific Govern rules.
+logging**, and **Bedrock Agents**, plus a **Bedrock AgentCore** scanner
+(runtimes, MCP gateways, memories) — with Bedrock-specific Govern rules.
 Full details: [docs/bedrock-security.md](docs/bedrock-security.md).
 
 ## Measure your defenses (red-team benchmark)

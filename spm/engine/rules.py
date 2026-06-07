@@ -285,3 +285,60 @@ def check_excessive_agent_privilege(agent: dict) -> Finding | None:
         remediation="Apply least agency: give the agent its own scoped, time-bound role; remove admin/wildcards.",
         compliance_frameworks=["OWASP_AGENTIC:ASI03", "OWASP_LLM_TOP10:LLM06", "NIST_AI_RMF"],
     )
+
+
+# ------------------------------------------------------------------
+# Amazon Bedrock AgentCore posture rules (operate on agentcore_scanner inventory)
+# ------------------------------------------------------------------
+
+@rule("agentcore_gateway_no_auth", "AgentCore Gateway Without Authorizer",
+      "AgentCore (MCP) gateway has no authorizer (unauthenticated tool access)",
+      "high", "agentcore_gateway", ["OWASP_AGENTIC:ASI04", "OWASP_AGENTIC:ASI07", "NIST_AI_RMF"])
+def check_agentcore_gateway_no_auth(agent: dict) -> Finding | None:
+    auth = (agent.get("config", {}).get("authorizer_type", "") or "").upper()
+    if auth in ("", "NONE"):
+        return Finding(agent_id=agent["agent_id"], severity="high", rule_id="agentcore_gateway_no_auth",
+                       title=f"Unauthenticated AgentCore gateway: {agent.get('name', 'unknown')}",
+                       description="This AgentCore gateway has no authorizer; MCP tools are reachable without auth.",
+                       remediation="Configure CUSTOM_JWT or AWS_IAM authorization on the gateway.",
+                       compliance_frameworks=["OWASP_AGENTIC:ASI04", "OWASP_AGENTIC:ASI07", "NIST_AI_RMF"])
+    return None
+
+
+@rule("agentcore_gateway_unencrypted", "AgentCore Gateway Without CMK",
+      "AgentCore gateway is not encrypted with a customer-managed KMS key",
+      "medium", "agentcore_gateway", ["OWASP_LLM_TOP10:LLM08", "NIST_AI_RMF"])
+def check_agentcore_gateway_unencrypted(agent: dict) -> Finding | None:
+    if not agent.get("config", {}).get("has_kms", False):
+        return Finding(agent_id=agent["agent_id"], severity="medium", rule_id="agentcore_gateway_unencrypted",
+                       title=f"AgentCore gateway without CMK: {agent.get('name', 'unknown')}",
+                       description="Gateway does not use a customer-managed KMS key.",
+                       remediation="Set a customer-managed kmsKeyArn on the AgentCore gateway.",
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM08", "NIST_AI_RMF"])
+    return None
+
+
+@rule("agentcore_gateway_debug_errors", "AgentCore Gateway Verbose Errors",
+      "AgentCore gateway exceptionLevel is DEBUG (may leak internal detail)",
+      "low", "agentcore_gateway", ["OWASP_LLM_TOP10:LLM02", "NIST_AI_RMF"])
+def check_agentcore_gateway_debug_errors(agent: dict) -> Finding | None:
+    if (agent.get("config", {}).get("exception_level", "") or "").upper() == "DEBUG":
+        return Finding(agent_id=agent["agent_id"], severity="low", rule_id="agentcore_gateway_debug_errors",
+                       title=f"AgentCore gateway in DEBUG: {agent.get('name', 'unknown')}",
+                       description="Gateway exceptionLevel=DEBUG can expose internal error detail to callers.",
+                       remediation="Set exceptionLevel away from DEBUG for production gateways.",
+                       compliance_frameworks=["OWASP_LLM_TOP10:LLM02", "NIST_AI_RMF"])
+    return None
+
+
+@rule("agentcore_runtime_no_authorizer", "AgentCore Runtime Without Authorizer",
+      "AgentCore agent runtime has no inbound authorizer", "high", "agentcore_runtime",
+      ["OWASP_AGENTIC:ASI03", "NIST_AI_RMF"])
+def check_agentcore_runtime_no_authorizer(agent: dict) -> Finding | None:
+    if not agent.get("config", {}).get("has_authorizer", False):
+        return Finding(agent_id=agent["agent_id"], severity="high", rule_id="agentcore_runtime_no_authorizer",
+                       title=f"Unauthenticated AgentCore runtime: {agent.get('name', 'unknown')}",
+                       description="This AgentCore runtime has no inbound authorizer configured.",
+                       remediation="Configure an authorizer (e.g. JWT) on the agent runtime.",
+                       compliance_frameworks=["OWASP_AGENTIC:ASI03", "NIST_AI_RMF"])
+    return None

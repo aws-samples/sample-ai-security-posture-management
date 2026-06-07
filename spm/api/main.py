@@ -568,6 +568,15 @@ async def run_redteam(req: Request):
     return await run_benchmark()
 
 
+@app.post("/spm/api/guardian/run")
+async def run_guardian_endpoint(req: Request):
+    """Run the Guardian autonomous graduated-response orchestrator over recent
+    high/critical events (gated by SPM_GUARDIAN_MODE: off | recommend | auto)."""
+    await get_current_user(req)
+    from spm.defender.guardian import run_guardian
+    return await run_guardian()
+
+
 # ============================================================
 # AIDR — Integrations (Security Hub / SNS / EventBridge)
 # ============================================================

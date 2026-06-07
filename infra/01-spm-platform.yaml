@@ -212,6 +212,11 @@ Resources:
                   - bedrock:GetModelInvocationLoggingConfiguration
                   - bedrock:ListKnowledgeBases
                   - bedrock:GetKnowledgeBase
+                  - bedrock-agentcore:ListAgentRuntimes
+                  - bedrock-agentcore:GetAgentRuntime
+                  - bedrock-agentcore:ListGateways
+                  - bedrock-agentcore:GetGateway
+                  - bedrock-agentcore:ListMemories
                   - sagemaker:ListEndpoints
                   - lambda:ListFunctions
                   - cloudtrail:LookupEvents

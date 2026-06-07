@@ -33,6 +33,20 @@ unknown IAM principals via CloudTrail).
 
 Findings are tagged to OWASP LLM Top 10 (2025), NIST AI RMF, and MITRE ATLAS.
 
+## Amazon Bedrock AgentCore
+
+A dedicated `builtin.bedrock_agentcore` scanner (using the
+`bedrock-agentcore-control` APIs) discovers and assesses:
+
+| Resource | Captured | Rules |
+|----------|----------|-------|
+| Agent Runtimes | inbound authorizer, execution role, network config | `agentcore_runtime_no_authorizer` (High, ASI03) |
+| Gateways (MCP) | authorizer type, KMS encryption, exception level, role | `agentcore_gateway_no_auth` (High, ASI04/ASI07), `agentcore_gateway_unencrypted` (Medium), `agentcore_gateway_debug_errors` (Low) |
+| Memories | status | (inventory) |
+
+AgentCore runtimes/gateways carry an execution `roleArn`, so they are also
+covered by the agent identity / NHI rule (`excessive_agent_privilege`, ASI03).
+
 ## Defend — Bedrock-native runtime controls
 
 * **Amazon Bedrock Guardrails enforcement** (`builtin.bedrock_guardrail`

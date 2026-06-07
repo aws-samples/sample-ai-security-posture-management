@@ -309,8 +309,8 @@ SPM_PLUGINS="acme.spm_plugins" uvicorn spm.api.main:app
 ```
 
 Inspect everything that's loaded at `GET /spm/api/plugins`. Full guide:
-[docs/extending.md](docs/extending.md). How it stacks up against commercial AI
-agent security platforms: [docs/comparison.md](docs/comparison.md).
+[docs/extending.md](docs/extending.md). How it compares to commercial AI agent
+security platforms: [docs/comparison.md](docs/comparison.md).
 
 ## Testing
 

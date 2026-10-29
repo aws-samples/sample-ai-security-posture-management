@@ -15,6 +15,8 @@ Description: >
       spm-origin.example.com (CNAME / Route 53 alias to the ALB DNS name).
     * AlbCertificateArn - ACM certificate in this stack's Region covering
       OriginDomainName.
+    * S3AccessLogsBucketName - existing bucket (same account and Region) that
+      receives S3 server access logs, e.g. a central log-archive bucket.
 
 Parameters:
   EnvironmentName:
@@ -53,6 +55,14 @@ Parameters:
     Default: 90
     MinValue: 1
     Description: Days to keep CloudFront access logs.
+  S3AccessLogsBucketName:
+    Type: String
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+    Description: >
+      Existing bucket in this account and Region that receives S3 server access
+      logs (for example your central log-archive bucket). Its bucket policy must
+      allow logging.s3.amazonaws.com to write objects. The CloudFront log
+      bucket's own access logs go here.
 
 Resources:
   # ============ Dedicated HTTPS ALB Listener for SPM ============
@@ -92,12 +102,10 @@ Resources:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
-    Metadata:
-      checkov:
-        skip:
-          - id: CKV_AWS_18
-            comment: This is the access-log destination; logging it to itself would loop.
     Properties:
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3AccessLogsBucketName
+        LogFilePrefix: !Sub s3-access/${EnvironmentName}-spm-cloudfront-logs/
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerPreferred

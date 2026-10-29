@@ -24,6 +24,7 @@ set -euo pipefail
 #     SPM_CLOUDFRONT_CERT_ARN    ACM cert in us-east-1 covering SPM_DASHBOARD_DOMAIN
 #     SPM_ORIGIN_DOMAIN          DNS name aliased to the ALB, e.g. spm-origin.example.com
 #     SPM_ALB_CERT_ARN           ACM cert in AWS_REGION covering SPM_ORIGIN_DOMAIN
+#     SPM_S3_ACCESS_LOGS_BUCKET  existing S3 server-access-log bucket in AWS_REGION
 #
 #   Recommended:
 #     COGNITO_USER_POOL_ID       enables dashboard auth (blank disables it)
@@ -55,6 +56,7 @@ set -euo pipefail
 : "${SPM_CLOUDFRONT_CERT_ARN:?Set SPM_CLOUDFRONT_CERT_ARN (ACM cert in us-east-1)}"
 : "${SPM_ORIGIN_DOMAIN:?Set SPM_ORIGIN_DOMAIN (DNS name aliased to the ALB)}"
 : "${SPM_ALB_CERT_ARN:?Set SPM_ALB_CERT_ARN (ACM cert in AWS_REGION)}"
+: "${SPM_S3_ACCESS_LOGS_BUCKET:?Set SPM_S3_ACCESS_LOGS_BUCKET (existing S3 access-log bucket)}"
 
 ENV_NAME="${ENV_NAME:-ai-spm}"
 SPM_LISTENER_PORT="${SPM_LISTENER_PORT:-8090}"
@@ -154,7 +156,8 @@ aws cloudformation deploy \
     "DashboardDomainName=${SPM_DASHBOARD_DOMAIN}" \
     "CloudFrontCertificateArn=${SPM_CLOUDFRONT_CERT_ARN}" \
     "OriginDomainName=${SPM_ORIGIN_DOMAIN}" \
-    "AlbCertificateArn=${SPM_ALB_CERT_ARN}"
+    "AlbCertificateArn=${SPM_ALB_CERT_ARN}" \
+    "S3AccessLogsBucketName=${SPM_S3_ACCESS_LOGS_BUCKET}"
 
 DASH_URL=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}-spm-cdn" --region "$AWS_REGION" \
   --query 'Stacks[0].Outputs[?OutputKey==`SPMDashboardUrl`].OutputValue' --output text)

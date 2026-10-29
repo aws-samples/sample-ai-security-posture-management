@@ -85,6 +85,10 @@ This is an extension, so it requires an existing platform to monitor:
   for the dashboard hostname (CloudFront), and one in your deployment Region for
   an origin hostname that points at your ALB. Traffic is HTTPS (TLS 1.2+) from
   the browser to CloudFront and from CloudFront to the ALB.
+- An existing **S3 server access log bucket** in the deployment Region (for
+  example a central log-archive bucket) whose bucket policy lets
+  `logging.s3.amazonaws.com` write objects. The CloudFront access-log bucket
+  sends its own S3 access logs there.
 - Tooling: `aws` CLI, `finch` or `docker`, Python 3.11+, Node.js 20+.
 
 ## Repository layout

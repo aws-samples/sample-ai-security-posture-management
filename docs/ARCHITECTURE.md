@@ -76,7 +76,8 @@ distribution on your dashboard hostname (ACM certificate, TLS 1.2+ for viewers)
 sits in front of the listener and connects to the ALB over HTTPS only, using an
 origin hostname that matches the ALB certificate: `/spm/*` routes to the SPM
 API, everything else to the SPM UI. CloudFront access logs go to an encrypted,
-non-public S3 bucket. The ALB security group must allow inbound on the listener
+non-public S3 bucket, whose own S3 server access logs go to the existing
+access-log bucket you provide. The ALB security group must allow inbound on the listener
 port from the CloudFront origin-facing managed prefix list.
 
 ## 6. IAM

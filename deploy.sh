@@ -43,6 +43,8 @@ set -euo pipefail
 #     SPM_EVENT_BUS_NAME         EventBridge bus for high-severity events
 #     SPM_SECURITY_HUB_ENABLED   "true" exports findings to Security Hub
 #     SPM_WAF_RATE_LIMIT         requests per IP per 5 minutes (default: 2000)
+#     SPM_COGNITO_THREAT_PROTECTION  ENFORCED (default) | AUDIT | OFF; ENFORCED and
+#                                AUDIT use the Cognito Plus plan (per-MAU pricing)
 #     ENV_NAME                   resource/table prefix (default: ai-spm)
 #     SPM_LISTENER_PORT          dedicated ALB listener port (default: 8090)
 # ============================================================
@@ -63,6 +65,7 @@ set -euo pipefail
 ENV_NAME="${ENV_NAME:-ai-spm}"
 SPM_LISTENER_PORT="${SPM_LISTENER_PORT:-8090}"
 SPM_WAF_RATE_LIMIT="${SPM_WAF_RATE_LIMIT:-2000}"
+SPM_COGNITO_THREAT_PROTECTION="${SPM_COGNITO_THREAT_PROTECTION:-ENFORCED}"
 LITELLM_URL="${LITELLM_URL:-}"
 LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
 SPM_LITELLM_KEY_SECRET_ARN="${SPM_LITELLM_KEY_SECRET_ARN:-}"
@@ -102,7 +105,9 @@ aws cloudformation deploy \
   --template-file "$SCRIPT_DIR/infra/00-spm-identity.yaml" \
   --region "$AWS_REGION" \
   --no-fail-on-empty-changeset \
-  --parameter-overrides "EnvironmentName=${ENV_NAME}"
+  --parameter-overrides \
+    "EnvironmentName=${ENV_NAME}" \
+    "ThreatProtectionMode=${SPM_COGNITO_THREAT_PROTECTION}"
 COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}-spm-identity" --region "$AWS_REGION" \
   --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' --output text)
 COGNITO_CLIENT_ID=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}-spm-identity" --region "$AWS_REGION" \

@@ -10,6 +10,18 @@ Parameters:
   EnvironmentName:
     Type: String
     Default: ai-spm
+  ThreatProtectionMode:
+    Type: String
+    Default: ENFORCED
+    AllowedValues: [ENFORCED, AUDIT, 'OFF']
+    Description: >
+      Cognito threat protection for sign-ins: ENFORCED blocks or challenges
+      risky sign-ins and compromised credentials, AUDIT only logs risk, OFF
+      disables it. ENFORCED and AUDIT put the pool on the Cognito Plus feature
+      plan, which is billed per monthly active user; OFF uses Essentials.
+
+Conditions:
+  ThreatProtectionOn: !Not [!Equals [!Ref ThreatProtectionMode, 'OFF']]
 
 Resources:
   SPMUserPool:
@@ -19,6 +31,11 @@ Resources:
     Properties:
       UserPoolName: !Sub ${EnvironmentName}-spm-users
       DeletionProtection: ACTIVE
+      # Threat protection (adaptive authentication + compromised-credential
+      # detection) needs the Plus plan.
+      UserPoolTier: !If [ThreatProtectionOn, PLUS, ESSENTIALS]
+      UserPoolAddOns:
+        AdvancedSecurityMode: !Ref ThreatProtectionMode
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
       # No self-service sign-up: only administrators can create users.

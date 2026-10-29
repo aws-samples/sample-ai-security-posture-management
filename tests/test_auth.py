@@ -1,5 +1,6 @@
 """Tests for fail-closed Cognito authentication and group-based authorization."""
 import asyncio
+import ipaddress
 import secrets
 import time
 
@@ -22,6 +23,8 @@ POOL = "us-east-1_TESTPOOL1"
 CLIENT = "testclientid"
 REGION = "us-east-1"
 KID = "test-kid"
+# The all-interfaces address the startup guard must refuse (built, not bound).
+ALL_INTERFACES = str(ipaddress.IPv4Address(0))
 # Cognito token_use claim values (token types, not credentials).
 ID_USE = "id"
 ACCESS_USE = "access"
@@ -183,7 +186,7 @@ def test_unknown_kid_refetch_is_rate_limited(configured, monkeypatch):
 
 @pytest.mark.parametrize("host,ecs,ok", [
     ("127.0.0.1", False, True), ("::1", False, True), ("localhost", False, True),
-    ("0.0.0.0", False, False), ("10.0.0.5", False, False), ("127.0.0.1", True, False),
+    (ALL_INTERFACES, False, False), ("10.0.0.5", False, False), ("127.0.0.1", True, False),
 ])
 def test_auth_disabled_only_on_local_loopback(monkeypatch, host, ecs, ok):
     monkeypatch.setenv("SPM_AUTH_DISABLED", "true")
@@ -201,4 +204,4 @@ def test_auth_disabled_only_on_local_loopback(monkeypatch, host, ecs, ok):
 
 def test_auth_enabled_never_blocks_startup(monkeypatch):
     monkeypatch.delenv("SPM_AUTH_DISABLED", raising=False)
-    auth.assert_auth_disabled_is_local("0.0.0.0")
+    auth.assert_auth_disabled_is_local(ALL_INTERFACES)

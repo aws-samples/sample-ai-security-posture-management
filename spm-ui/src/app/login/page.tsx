@@ -1,19 +1,22 @@
 "use client";
 import { useState } from "react";
-import { signIn, signUp, confirmSignUp } from "@/lib/auth";
+import { signIn } from "@/lib/auth";
 
+// Accounts are created by an administrator in the Cognito user pool and added
+// to the spm-admins or spm-viewers group; there is no self-service sign-up.
 export default function LoginPage() {
   const [email, setEmail] = useState(""); const [password, setPassword] = useState("");
-  const [code, setCode] = useState(""); const [mode, setMode] = useState<"login" | "signup" | "confirm">("login");
   const [error, setError] = useState(""); const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault(); setError(""); setLoading(true);
     try {
-      if (mode === "login") { await signIn(email, password); window.location.href = "/"; }
-      else if (mode === "signup") { await signUp(email, password); setMode("confirm"); }
-      else { await confirmSignUp(email, code); setMode("login"); }
-    } catch (err: any) { setError(err.message || "Error"); }
+      await signIn(email, password); window.location.href = "/";
+    } catch (err: any) {
+      setError(err?.message === "NEW_PASSWORD_REQUIRED"
+        ? "Your administrator must set a permanent password for this account."
+        : err?.message || "Error");
+    }
     setLoading(false);
   }
 
@@ -29,22 +32,17 @@ export default function LoginPage() {
         </div>
 
         <div className="bg-white/[0.02] border border-white/[0.06] rounded-2xl p-6 space-y-4">
-          <p className="text-sm text-gray-400 text-center">{mode === "login" ? "Sign in to continue" : mode === "signup" ? "Create your account" : "Enter confirmation code"}</p>
+          <p className="text-sm text-gray-400 text-center">Sign in to continue</p>
           {error && <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 text-red-400 text-sm">{error}</div>}
           <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" type="email"
             className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-red-500/50 focus:ring-1 focus:ring-red-500/20 transition placeholder:text-gray-600" />
-          {mode !== "confirm" && <input value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" type="password"
-            className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-red-500/50 focus:ring-1 focus:ring-red-500/20 transition placeholder:text-gray-600" />}
-          {mode === "confirm" && <input value={code} onChange={e => setCode(e.target.value)} placeholder="Confirmation code"
-            className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-red-500/50 focus:ring-1 focus:ring-red-500/20 transition placeholder:text-gray-600" />}
+          <input value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" type="password"
+            className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-red-500/50 focus:ring-1 focus:ring-red-500/20 transition placeholder:text-gray-600" />
           <button type="submit" disabled={loading}
             className="w-full bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-500 hover:to-orange-500 disabled:opacity-50 py-2.5 rounded-xl text-sm font-medium transition shadow-lg shadow-red-500/20">
-            {loading ? "..." : mode === "login" ? "Sign In" : mode === "signup" ? "Sign Up" : "Confirm"}
+            {loading ? "..." : "Sign In"}
           </button>
-          <p className="text-[11px] text-gray-600 text-center">
-            {mode === "login" ? <>No account? <button type="button" onClick={() => setMode("signup")} className="text-red-400 hover:text-red-300">Sign up</button></> :
-              <button type="button" onClick={() => setMode("login")} className="text-red-400 hover:text-red-300">Back to sign in</button>}
-          </p>
+          <p className="text-[11px] text-gray-600 text-center">Accounts are created by your AI SPM administrator.</p>
         </div>
       </form>
     </div>

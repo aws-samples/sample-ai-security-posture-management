@@ -21,6 +21,12 @@ tracer = trace.get_tracer("spm.api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_tracing("spm-api")
+    from spm.core.auth import auth_disabled
+    import logging
+    if auth_disabled():
+        logging.getLogger("spm.auth").warning(
+            "SPM_AUTH_DISABLED=true: authentication is OFF. Local development only; "
+            "never set this on a deployed or network-reachable API.")
     # Load built-in + third-party (SPM_PLUGINS) extensions
     from spm.plugins import load_plugins
     load_plugins()
@@ -34,7 +40,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI SPM API", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# CORS is off by default: the deployed dashboard and API share one CloudFront
+# origin. For local development (UI on :3001, API on :8001) set
+# SPM_CORS_ORIGINS=http://localhost:3001. Comma-separated; "*" is rejected.
+_cors_origins = [o.strip() for o in os.getenv("SPM_CORS_ORIGINS", "").split(",")
+                 if o.strip() and o.strip() != "*"]
+if _cors_origins:
+    app.add_middleware(CORSMiddleware, allow_origins=_cors_origins,
+                       allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                       allow_headers=["Authorization", "Content-Type"])
 FastAPIInstrumentor.instrument_app(app)
 
 

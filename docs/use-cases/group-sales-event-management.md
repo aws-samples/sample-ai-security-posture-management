@@ -89,7 +89,8 @@ for compliance reporting.
 export SPM_CONFIG_FILE="$(pwd)/config/hospitality-group-sales.example.json"
 
 # (local) run the API, then trigger discovery + evaluation
-uvicorn spm.api.main:app --port 8001 &
+# SPM_AUTH_DISABLED=true is for local development only (API on 127.0.0.1).
+SPM_AUTH_DISABLED=true uvicorn spm.api.main:app --port 8001 &
 curl -X POST localhost:8001/spm/api/scan       # Observe: discover agents + topology
 curl -X POST localhost:8001/spm/api/evaluate   # Govern: generate findings
 ```

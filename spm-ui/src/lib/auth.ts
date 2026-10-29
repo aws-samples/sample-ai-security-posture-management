@@ -1,4 +1,4 @@
-import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserAttribute, CognitoUserSession } from "amazon-cognito-identity-js";
+import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserSession } from "amazon-cognito-identity-js";
 
 const POOL_ID = process.env.NEXT_PUBLIC_COGNITO_POOL_ID || "";
 const CLIENT_ID = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID || "";
@@ -29,21 +29,6 @@ export function signIn(email: string, password: string): Promise<CognitoUserSess
       onSuccess: resolve, onFailure: reject,
       newPasswordRequired: () => reject(new Error("NEW_PASSWORD_REQUIRED")),
     });
-  });
-}
-
-export function signUp(email: string, password: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    userPool.signUp(email, password, [new CognitoUserAttribute({ Name: "email", Value: email })], [], (err) => {
-      if (err) return reject(err); resolve();
-    });
-  });
-}
-
-export function confirmSignUp(email: string, code: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const user = new CognitoUser({ Username: email, Pool: userPool });
-    user.confirmRegistration(code, true, (err) => { if (err) return reject(err); resolve(); });
   });
 }
 

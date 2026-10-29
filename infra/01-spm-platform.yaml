@@ -30,37 +30,38 @@ Parameters:
   EcsSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Security group applied to the SPM ECS tasks.
-  EcsTaskExecutionRoleArn:
-    Type: String
-    Description: ARN of an ECS task execution role (pulls images, writes logs).
   ServiceDiscoveryNamespaceId:
     Type: String
     Description: Cloud Map private DNS namespace ID for service discovery.
 
   CognitoUserPoolId:
     Type: String
-    Default: ''
+    AllowedPattern: '^[a-z]{2}(-[a-z]+)+-[0-9]_[A-Za-z0-9]+$'
     Description: >
-      Cognito user pool ID for dashboard auth. Leave blank to disable auth
-      (NOT recommended outside local testing).
+      Cognito user pool ID for dashboard and API authentication (required; the
+      API rejects every request when it is not configured). Create users as an
+      administrator and add them to the spm-admins or spm-viewers group.
   CognitoClientId:
     Type: String
-    Default: ''
-    Description: Cognito app client ID for the dashboard.
+    AllowedPattern: '^[A-Za-z0-9]{1,128}$'
+    Description: Cognito app client ID for the dashboard (required).
 
   LiteLLMUrl:
     Type: String
     Default: ''
     Description: >
       Base URL of your LiteLLM proxy, e.g. http://litellm.<namespace>.local:4000
-  LiteLLMMasterKey:
+  LiteLLMKeySecretArn:
     Type: String
     Default: ''
-    NoEcho: true
+    AllowedPattern: '^$|^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$'
     Description: >
-      LiteLLM master/admin key used by the scanners and remediation actions.
-      For production, store this in AWS Secrets Manager and inject it via the
-      task definition's `Secrets` instead of this plaintext parameter.
+      Full ARN of an AWS Secrets Manager secret whose value is the LiteLLM
+      master/admin key used by the scanners and remediation actions. ECS injects
+      it as LITELLM_KEY at container start; it never appears in the task
+      definition. deploy.sh creates this secret from LITELLM_MASTER_KEY.
+      The secret must use the AWS managed key (aws/secretsmanager). Leave blank
+      to run without a LiteLLM key.
   TemporalAddress:
     Type: String
     Default: ''
@@ -112,7 +113,7 @@ Parameters:
       product ARN in this Region.
 
 Conditions:
-  HasCognito: !Not [!Equals [!Ref CognitoUserPoolId, '']]
+  HasLiteLLMSecret: !Not [!Equals [!Ref LiteLLMKeySecretArn, '']]
   HasGuardrail: !Not [!Equals [!Ref BedrockGuardrailId, '']]
   HasSnsTopic: !Not [!Equals [!Ref AlertsSnsTopicArn, '']]
   HasEventBus: !Not [!Equals [!Ref AlertsEventBusName, '']]
@@ -121,13 +122,14 @@ Conditions:
 Resources:
   # ============ Encryption key for SPM data ============
   # Customer managed key for the SPM DynamoDB tables (inventory, findings and
-  # runtime events can contain prompt fragments and agent configuration).
+  # runtime events can contain prompt fragments and agent configuration) and the
+  # SPM CloudWatch log groups.
   SPMDataKey:
     Type: AWS::KMS::Key
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      Description: !Sub ${EnvironmentName} AI SPM DynamoDB table encryption
+      Description: !Sub ${EnvironmentName} AI SPM DynamoDB table and log encryption
       EnableKeyRotation: true
       KeyPolicy:
         Version: '2012-10-17'
@@ -140,6 +142,21 @@ Resources:
               AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
             Action: kms:*
             Resource: '*'
+          # CloudWatch Logs may use the key only for this stack's log groups.
+          - Sid: AllowSpmLogGroups
+            Effect: Allow
+            Principal:
+              Service: !Sub logs.${AWS::Region}.amazonaws.com
+            Action:
+              - kms:Encrypt*
+              - kms:Decrypt*
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: '*'
+            Condition:
+              ArnLike:
+                kms:EncryptionContext:aws:logs:arn: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${EnvironmentName}/*
 
   SPMDataKeyAlias:
     Type: AWS::KMS::Alias
@@ -249,6 +266,36 @@ Resources:
               KeyType: HASH
           Projection:
             ProjectionType: ALL
+
+  # ============ IAM Role for ECS task execution ============
+  # Pulls images and writes logs; reads only the LiteLLM key secret (if set).
+  SPMTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - !If
+          - HasLiteLLMSecret
+          - PolicyName: ReadLiteLLMKeySecret
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - secretsmanager:GetSecretValue
+                  Resource: !Ref LiteLLMKeySecretArn
+          - !Ref AWS::NoValue
 
   # ============ IAM Role for SPM tasks ============
   SPMTaskRole:
@@ -415,6 +462,7 @@ Resources:
     Properties:
       LogGroupName: !Sub /ecs/${EnvironmentName}/spm-api
       RetentionInDays: 14
+      KmsKeyId: !GetAtt SPMDataKey.Arn
 
   SPMAPIServiceDiscovery:
     Type: AWS::ServiceDiscovery::Service
@@ -448,7 +496,7 @@ Resources:
       RuntimePlatform:
         CpuArchitecture: ARM64
         OperatingSystemFamily: LINUX
-      ExecutionRoleArn: !Ref EcsTaskExecutionRoleArn
+      ExecutionRoleArn: !GetAtt SPMTaskExecutionRole.Arn
       TaskRoleArn: !GetAtt SPMTaskRole.Arn
       ContainerDefinitions:
         - Name: spm-api
@@ -456,6 +504,11 @@ Resources:
           Essential: true
           PortMappings:
             - ContainerPort: 8001
+          Secrets: !If
+            - HasLiteLLMSecret
+            - - Name: LITELLM_KEY
+                ValueFrom: !Ref LiteLLMKeySecretArn
+            - !Ref AWS::NoValue
           Environment:
             - Name: ENVIRONMENT_NAME
               Value: !Ref EnvironmentName
@@ -463,8 +516,6 @@ Resources:
               Value: !Ref TemporalAddress
             - Name: LITELLM_URL
               Value: !Ref LiteLLMUrl
-            - Name: LITELLM_KEY
-              Value: !Ref LiteLLMMasterKey
             - Name: SPM_INVENTORY_TABLE
               Value: !Ref SPMInventoryTable
             - Name: SPM_FINDINGS_TABLE
@@ -528,6 +579,7 @@ Resources:
     Properties:
       LogGroupName: !Sub /ecs/${EnvironmentName}/spm-ui
       RetentionInDays: 14
+      KmsKeyId: !GetAtt SPMDataKey.Arn
 
   SPMUITargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -551,7 +603,7 @@ Resources:
       RuntimePlatform:
         CpuArchitecture: ARM64
         OperatingSystemFamily: LINUX
-      ExecutionRoleArn: !Ref EcsTaskExecutionRoleArn
+      ExecutionRoleArn: !GetAtt SPMTaskExecutionRole.Arn
       ContainerDefinitions:
         - Name: spm-ui
           Image: !Ref SPMUIImage

@@ -63,6 +63,12 @@ Parameters:
       logs (for example your central log-archive bucket). Its bucket policy must
       allow logging.s3.amazonaws.com to write objects. The CloudFront log
       bucket's own access logs go here.
+  WebAclArn:
+    Type: String
+    AllowedPattern: '^arn:aws[a-z-]*:wafv2:us-east-1:[0-9]{12}:global/webacl/.+$'
+    Description: >
+      ARN of the CloudFront-scoped AWS WAF web ACL (WebAclArn output of
+      03-spm-waf.yaml, deployed in us-east-1).
 
 Resources:
   # ============ Dedicated HTTPS ALB Listener for SPM ============
@@ -161,6 +167,7 @@ Resources:
       DistributionConfig:
         Enabled: true
         Comment: !Sub ${EnvironmentName} - AI SPM Dashboard
+        WebACLId: !Ref WebAclArn
         Aliases:
           - !Ref DashboardDomainName
         ViewerCertificate:

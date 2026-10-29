@@ -19,9 +19,11 @@ single dashboard across three pillars:
 
 ![AI SPM Architecture](spm-ui/public/architecture.png)
 
-> **Sample code, not production-ready.** This repository is intended to
-> demonstrate an architecture and accelerate your own build. Review the
-> [Security](#security) section and harden it before any production use.
+> **Sample code, not production-ready.** This is sample code, for non-production
+> usage. You should work with your security and legal teams to meet your
+> organizational security, regulatory and compliance requirements before
+> deployment. Review the [Security](#security) section before any use beyond
+> evaluation.
 
 ## Featured use case — Group Sales & Event Management with AI Planning (Hospitality)
 
@@ -76,8 +78,8 @@ This is an extension, so it requires an existing platform to monitor:
 - An existing **VPC** with private subnets (NAT gateway or VPC endpoints for
   outbound AWS API access).
 - An existing **ECS Fargate cluster**, **Application Load Balancer**, an ECS
-  **task execution role**, an ECS **security group**, and a **Cloud Map**
-  private DNS namespace.
+  **security group**, and a **Cloud Map** private DNS namespace. The stack
+  creates its own ECS task execution role.
 - A **LiteLLM** proxy and (optionally) a **Temporal** server to discover.
 - **Amazon Bedrock** model access for the optional semantic injection classifier.
 - An **Amazon Cognito** user pool + app client for dashboard auth.
@@ -104,7 +106,8 @@ This is an extension, so it requires an existing platform to monitor:
 ├── spm-ui/                    # Next.js dashboard
 ├── infra/
 │   ├── 01-spm-platform.yaml   # tables, IAM, ECS services, target groups
-│   └── 02-spm-cdn.yaml        # ALB listener + CloudFront
+│   ├── 02-spm-cdn.yaml        # ALB listener + CloudFront
+│   └── 03-spm-waf.yaml        # AWS WAF web ACL for CloudFront (us-east-1)
 ├── config/
 │   ├── spm-config.example.json            # KNOWN_WORKFLOWS / EXPECTED_DEPS (generic)
 │   ├── hospitality-group-sales.example.json # Featured hospitality use-case baseline
@@ -131,7 +134,10 @@ export AWS_REGION=us-east-1
 export LITELLM_URL=http://localhost:4000
 export LITELLM_KEY=your-litellm-admin-key
 export TEMPORAL_ADDRESS=localhost:7233
-# COGNITO_POOL_ID unset => auth disabled (local only)
+# Local development only: without Cognito the API rejects every request unless
+# you opt out explicitly. uvicorn binds to 127.0.0.1 by default; keep it that way.
+export SPM_AUTH_DISABLED=true
+export SPM_CORS_ORIGINS=http://localhost:3001   # lets the local dashboard call the API
 
 uvicorn spm.api.main:app --reload --port 8001
 # Health check:
@@ -144,7 +150,7 @@ curl localhost:8001/spm/health
 cd spm-ui
 npm install
 export NEXT_PUBLIC_API_URL=http://localhost:8001
-export NEXT_PUBLIC_COGNITO_POOL_ID=...   # optional for local
+export NEXT_PUBLIC_COGNITO_POOL_ID=...   # any Cognito pool/client (required to build)
 export NEXT_PUBLIC_COGNITO_CLIENT_ID=...
 npm run dev   # http://localhost:3001
 ```
@@ -159,15 +165,48 @@ source .env
 ./deploy.sh
 ```
 
-`deploy.sh` builds and pushes the two images to ECR and deploys both
-CloudFormation stacks. After it completes:
+`deploy.sh` builds and pushes the two images to ECR, stores the LiteLLM key in
+AWS Secrets Manager, and deploys three CloudFormation stacks (platform, WAF in
+`us-east-1`, CDN). After it completes:
 
 1. Create the two DNS records the script prints: the dashboard hostname to the
    CloudFront distribution, and the origin hostname to your ALB.
 2. Allow inbound on the SPM listener port (default `8090`, HTTPS) on your ALB
    security group from the CloudFront origin-facing managed prefix list.
-3. Register the Defend callback in your LiteLLM config (see
+3. Create dashboard users (see [Users](#users)).
+4. Register the Defend callback in your LiteLLM config (see
    [`config/litellm-callback.example.yaml`](config/litellm-callback.example.yaml)).
+
+### Users
+
+The API authorizes requests by Cognito group, read from the ID token:
+
+| Group | Access |
+|-------|--------|
+| `spm-viewers` | Read-only: dashboard, inventory, findings, policies, runtime events |
+| `spm-admins` | Everything, including scans, policy and defender changes, remediation, purge, red-team and integrations |
+
+Users in neither group get `403`. Override the names with `SPM_ADMIN_GROUP` /
+`SPM_VIEWER_GROUP`.
+
+In the Cognito console, turn off self-service sign-up for the user pool (sign-up
+experience: **Self-registration** off). Then create groups and users as an
+administrator:
+
+```bash
+POOL="$COGNITO_USER_POOL_ID"
+aws cognito-idp create-group --user-pool-id "$POOL" --group-name spm-admins
+aws cognito-idp create-group --user-pool-id "$POOL" --group-name spm-viewers
+aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice@example.com \
+  --user-attributes Name=email,Value=alice@example.com Name=email_verified,Value=true \
+  --message-action SUPPRESS
+# Prompts for the password so it doesn't land in shell history.
+read -rs -p "Password for alice: " PW; echo
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL" \
+  --username alice@example.com --permanent --password "$PW"; unset PW
+aws cognito-idp admin-add-user-to-group --user-pool-id "$POOL" \
+  --username alice@example.com --group-name spm-admins
+```
 
 ## Configuration
 
@@ -177,10 +216,13 @@ All configuration is via environment variables (12-factor). Key ones:
 |----------|---------|-------------|
 | `ENVIRONMENT_NAME` | `ai-spm` | Prefix for DynamoDB table names |
 | `LITELLM_URL` | `http://localhost:4000` | LiteLLM proxy base URL |
-| `LITELLM_KEY` | _(empty)_ | LiteLLM admin key (use Secrets Manager in prod) |
+| `LITELLM_KEY` | _(empty)_ | LiteLLM admin key (deployed: injected from Secrets Manager) |
 | `TEMPORAL_ADDRESS` | `localhost:7233` | Temporal frontend address |
 | `AWS_REGION` | `us-east-1` | Region for boto3 clients |
-| `COGNITO_POOL_ID` / `COGNITO_CLIENT_ID` | _(empty)_ | Dashboard auth (empty = disabled) |
+| `COGNITO_POOL_ID` / `COGNITO_CLIENT_ID` | _(empty)_ | Cognito auth (required; empty = every request rejected with 503) |
+| `SPM_ADMIN_GROUP` / `SPM_VIEWER_GROUP` | `spm-admins` / `spm-viewers` | Cognito groups for full and read-only access |
+| `SPM_AUTH_DISABLED` | _(empty)_ | Set exactly `true` to turn auth off for **local development only** |
+| `SPM_CORS_ORIGINS` | _(empty)_ | Comma-separated exact origins allowed by CORS (`*` is ignored) |
 | `SPM_CONFIG_FILE` | _(unset)_ | Path to JSON with `known_workflows` / `expected_dependencies` |
 | `SPM_MONITORED_SERVICES` | _(empty)_ | Comma-separated service-name filter for new-dependency alerts |
 | `SPM_CLASSIFIER_MODEL_ID` | `us.anthropic.claude-3-5-haiku-20241022-v1:0` | Bedrock model for semantic injection detection |
@@ -337,22 +379,36 @@ scoring engine, and `db.py` against moto-mocked DynamoDB. CI runs on every push
 
 ## Security
 
-- **Authentication:** Set `COGNITO_POOL_ID`/`COGNITO_CLIENT_ID`. With them
-  unset, the API treats every caller as anonymous — for local development only.
-- **Secrets:** Never hardcode the LiteLLM master key. The provided CloudFormation
-  accepts it as a `NoEcho` parameter for convenience; for production, store it in
-  **AWS Secrets Manager** and inject it via the task definition's `Secrets`.
-- **CORS:** The API uses a permissive `*` CORS policy for the sample. Restrict it
-  to your dashboard origin before production use.
+- **Authentication (fail closed):** The API requires a Cognito ID token on every
+  `/spm/api/*` route. If `COGNITO_POOL_ID`/`COGNITO_CLIENT_ID` are unset it
+  rejects every request with `503`. `SPM_AUTH_DISABLED=true` turns auth off for
+  local development only; never set it on a deployed or network-reachable API.
+- **Authorization:** Read routes need the `spm-viewers` or `spm-admins` Cognito
+  group; every state-changing or action-triggering route needs `spm-admins`.
+  Each allowed admin action and each denial is written to the `spm.audit` log.
+- **Secrets:** The LiteLLM master key is stored in **AWS Secrets Manager** and
+  injected into the API container by ECS at start; it is not a CloudFormation
+  parameter and does not appear in the task definition.
+- **CORS:** Off by default (the dashboard and API share one origin). Set
+  `SPM_CORS_ORIGINS` to a comma-separated list of exact origins if you need it;
+  `*` is ignored.
+- **Edge:** HTTPS (TLS 1.2+) from browser to CloudFront and from CloudFront to
+  the ALB; AWS WAF (IP reputation, common rule set, known bad inputs, per-IP
+  rate limit) on the distribution; CloudFront and S3 access logging.
 - **Enforce mode:** Inline blocking (`/spm/api/defender/mode` = `enforce`) can
   reject live LLM traffic. Validate detection rules in `monitor` mode first.
 - **Least privilege:** Write actions on the SPM task role are scoped to specific
   resources (DynamoDB tables, the KMS table key, the classifier model, and the
   guardrail / SNS topic / EventBridge bus / Security Hub product you configure).
   `Resource: '*'` remains only on read-only discovery, X-Ray read, IAM read and
-  GuardDuty read actions, which enumerate resources account-wide.
-- **Data protection:** The SPM DynamoDB tables are encrypted with a customer
-  managed KMS key (rotation enabled) and have point-in-time recovery enabled.
+  GuardDuty read actions, which enumerate resources account-wide. The task
+  execution role can read only the LiteLLM key secret.
+- **Data protection:** The SPM DynamoDB tables and CloudWatch log groups are
+  encrypted with a customer managed KMS key (rotation enabled); the tables have
+  point-in-time recovery enabled.
+- **Supply chain:** Base images come from Amazon ECR Public; the UI image is
+  built with `npm ci` from the committed lockfile; ECR repositories scan on push
+  and use immutable tags.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md#security-issue-notifications) for how to
 report security issues.
@@ -361,10 +417,12 @@ report security issues.
 
 ```bash
 aws cloudformation delete-stack --stack-name ai-spm-cdn --region "$AWS_REGION"
+aws cloudformation delete-stack --stack-name ai-spm-waf --region us-east-1
 aws cloudformation delete-stack --stack-name ai-spm-platform --region "$AWS_REGION"
+aws secretsmanager delete-secret --secret-id ai-spm/spm/litellm-master-key --region "$AWS_REGION"
 # Optionally delete the ECR repositories: ai-spm-spm-api, ai-spm-spm-ui
-# The DynamoDB table KMS key (alias/ai-spm-spm-data) is retained on stack
-# deletion so backups stay decryptable; schedule its deletion when no longer needed.
+# The KMS key (alias/ai-spm-spm-data) is retained on stack deletion so backups
+# and logs stay decryptable; schedule its deletion when no longer needed.
 # The CloudFront access-log bucket is also retained; empty and delete it when done.
 ```
 

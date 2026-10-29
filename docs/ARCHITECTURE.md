@@ -78,9 +78,36 @@ origin hostname that matches the ALB certificate: `/spm/*` routes to the SPM
 API, everything else to the SPM UI. CloudFront access logs go to an encrypted,
 non-public S3 bucket, whose own S3 server access logs go to the existing
 access-log bucket you provide. The ALB security group must allow inbound on the listener
-port from the CloudFront origin-facing managed prefix list.
+port from the CloudFront origin-facing managed prefix list. An AWS WAF web ACL
+(stack `03-spm-waf.yaml`, deployed in `us-east-1`) is attached to the
+distribution with the Amazon IP reputation list, the core rule set, known bad
+inputs and a per-IP rate limit.
 
-## 6. IAM
+## 6. Authentication & authorization
+
+Every `/spm/api/*` route validates a Cognito ID token (RS256 signature against
+the pool's JWKS, issuer, audience = app client ID, `token_use = id`, expiry).
+The API fails closed: if `COGNITO_POOL_ID` / `COGNITO_CLIENT_ID` are unset,
+every request gets `503`. `SPM_AUTH_DISABLED=true` disables auth for local
+development only.
+
+Authorization uses the token's `cognito:groups` claim. Read requests need
+`spm-viewers` or `spm-admins`; all other methods (scans, evaluations, policy and
+defender changes, remediation, purge, red-team, integrations) need
+`spm-admins`. Allowed admin actions and all denials go to the `spm.audit` log
+with the user ID. The dashboard has no self-service sign-up; administrators
+create users. CORS is off unless `SPM_CORS_ORIGINS` lists exact origins.
+
+The transparent proxy routes (`/v1/*`) are not routed by CloudFront; only
+callers inside the VPC reach them through Cloud Map, and they forward the
+caller's own bearer token to LiteLLM, which authenticates it.
+
+## 7. IAM
+
+The ECS task execution role (created by the stack) has the AWS managed
+`AmazonECSTaskExecutionRolePolicy` plus `secretsmanager:GetSecretValue` on the
+LiteLLM key secret only. ECS injects that secret as `LITELLM_KEY`; the value is
+not in the task definition or CloudFormation parameters.
 
 The SPM task role grants:
 
@@ -104,7 +131,7 @@ The SPM task role grants:
 discovery and inspection calls. Those actions list or describe resources
 across the account, so they can't be limited to ARNs known at deploy time.
 
-## 7. Extensibility
+## 8. Extensibility
 
 - **New scanners:** add a module under `spm/scanner/` returning
   `AgentInventoryItem` dicts and wire it into `orchestrator.run_scan`.

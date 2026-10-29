@@ -70,11 +70,14 @@ evaluation, and performs privilege-escalation and attack-chain correlation.
 
 ## 5. Networking & delivery
 
-AI SPM registers two ECS services behind a dedicated ALB listener (default port
-`8090`). A CloudFront distribution sits in front of the listener: `/spm/*` routes
-to the SPM API, everything else to the SPM UI. The ALB security group must allow
-inbound on the listener port from the CloudFront origin-facing managed prefix
-list.
+AI SPM registers two ECS services behind a dedicated HTTPS ALB listener (default
+port `8090`, TLS 1.2+ via `ELBSecurityPolicy-TLS13-1-2-2021-06`). A CloudFront
+distribution on your dashboard hostname (ACM certificate, TLS 1.2+ for viewers)
+sits in front of the listener and connects to the ALB over HTTPS only, using an
+origin hostname that matches the ALB certificate: `/spm/*` routes to the SPM
+API, everything else to the SPM UI. CloudFront access logs go to an encrypted,
+non-public S3 bucket. The ALB security group must allow inbound on the listener
+port from the CloudFront origin-facing managed prefix list.
 
 ## 6. IAM
 

@@ -20,7 +20,10 @@ set -euo pipefail
 #     ECS_TASK_EXECUTION_ROLE_ARN  arn:aws:iam::...:role/...
 #     SERVICE_DISCOVERY_NS_ID    Cloud Map private namespace ID (ns-...)
 #     ALB_ARN                    arn:aws:elasticloadbalancing:...
-#     ALB_DNS_NAME               internal/public ALB DNS name
+#     SPM_DASHBOARD_DOMAIN       dashboard hostname, e.g. spm.example.com
+#     SPM_CLOUDFRONT_CERT_ARN    ACM cert in us-east-1 covering SPM_DASHBOARD_DOMAIN
+#     SPM_ORIGIN_DOMAIN          DNS name aliased to the ALB, e.g. spm-origin.example.com
+#     SPM_ALB_CERT_ARN           ACM cert in AWS_REGION covering SPM_ORIGIN_DOMAIN
 #
 #   Recommended:
 #     COGNITO_USER_POOL_ID       enables dashboard auth (blank disables it)
@@ -48,7 +51,10 @@ set -euo pipefail
 : "${ECS_TASK_EXECUTION_ROLE_ARN:?Set ECS_TASK_EXECUTION_ROLE_ARN}"
 : "${SERVICE_DISCOVERY_NS_ID:?Set SERVICE_DISCOVERY_NS_ID}"
 : "${ALB_ARN:?Set ALB_ARN}"
-: "${ALB_DNS_NAME:?Set ALB_DNS_NAME}"
+: "${SPM_DASHBOARD_DOMAIN:?Set SPM_DASHBOARD_DOMAIN (e.g. spm.example.com)}"
+: "${SPM_CLOUDFRONT_CERT_ARN:?Set SPM_CLOUDFRONT_CERT_ARN (ACM cert in us-east-1)}"
+: "${SPM_ORIGIN_DOMAIN:?Set SPM_ORIGIN_DOMAIN (DNS name aliased to the ALB)}"
+: "${SPM_ALB_CERT_ARN:?Set SPM_ALB_CERT_ARN (ACM cert in AWS_REGION)}"
 
 ENV_NAME="${ENV_NAME:-ai-spm}"
 SPM_LISTENER_PORT="${SPM_LISTENER_PORT:-8090}"
@@ -144,15 +150,24 @@ aws cloudformation deploy \
   --parameter-overrides \
     "EnvironmentName=${ENV_NAME}" \
     "AlbArn=${ALB_ARN}" \
-    "AlbDnsName=${ALB_DNS_NAME}" \
-    "ListenerPort=${SPM_LISTENER_PORT}"
+    "ListenerPort=${SPM_LISTENER_PORT}" \
+    "DashboardDomainName=${SPM_DASHBOARD_DOMAIN}" \
+    "CloudFrontCertificateArn=${SPM_CLOUDFRONT_CERT_ARN}" \
+    "OriginDomainName=${SPM_ORIGIN_DOMAIN}" \
+    "AlbCertificateArn=${SPM_ALB_CERT_ARN}"
 
 DASH_URL=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}-spm-cdn" --region "$AWS_REGION" \
   --query 'Stacks[0].Outputs[?OutputKey==`SPMDashboardUrl`].OutputValue' --output text)
+CF_DOMAIN=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}-spm-cdn" --region "$AWS_REGION" \
+  --query 'Stacks[0].Outputs[?OutputKey==`SPMDistributionDomainName`].OutputValue' --output text)
 
 echo "============================================"
 echo "  DEPLOYMENT COMPLETE"
 echo "  Dashboard: ${DASH_URL}"
+echo ""
+echo "  DNS (if not already in place):"
+echo "    ${SPM_DASHBOARD_DOMAIN} -> ${CF_DOMAIN} (CNAME / Route 53 alias)"
+echo "    ${SPM_ORIGIN_DOMAIN} -> your ALB DNS name (CNAME / Route 53 alias)"
 echo ""
 echo "  Reminder: allow inbound on port ${SPM_LISTENER_PORT} on the ALB security"
 echo "  group from the CloudFront origin-facing managed prefix list, and register"

@@ -81,6 +81,10 @@ This is an extension, so it requires an existing platform to monitor:
 - A **LiteLLM** proxy and (optionally) a **Temporal** server to discover.
 - **Amazon Bedrock** model access for the optional semantic injection classifier.
 - An **Amazon Cognito** user pool + app client for dashboard auth.
+- A **DNS domain** you control and two **ACM certificates**: one in `us-east-1`
+  for the dashboard hostname (CloudFront), and one in your deployment Region for
+  an origin hostname that points at your ALB. Traffic is HTTPS (TLS 1.2+) from
+  the browser to CloudFront and from CloudFront to the ALB.
 - Tooling: `aws` CLI, `finch` or `docker`, Python 3.11+, Node.js 20+.
 
 ## Repository layout
@@ -145,7 +149,8 @@ npm run dev   # http://localhost:3001
 
 ```bash
 cp .env.example .env
-# edit .env with your VPC, subnets, cluster, ALB, Cognito, LiteLLM, etc.
+# edit .env with your VPC, subnets, cluster, ALB, domain + ACM certificates,
+# Cognito, LiteLLM, etc.
 source .env
 ./deploy.sh
 ```
@@ -153,9 +158,11 @@ source .env
 `deploy.sh` builds and pushes the two images to ECR and deploys both
 CloudFormation stacks. After it completes:
 
-1. Allow inbound on the SPM listener port (default `8090`) on your ALB security
-   group from the CloudFront origin-facing managed prefix list.
-2. Register the Defend callback in your LiteLLM config (see
+1. Create the two DNS records the script prints: the dashboard hostname to the
+   CloudFront distribution, and the origin hostname to your ALB.
+2. Allow inbound on the SPM listener port (default `8090`, HTTPS) on your ALB
+   security group from the CloudFront origin-facing managed prefix list.
+3. Register the Defend callback in your LiteLLM config (see
    [`config/litellm-callback.example.yaml`](config/litellm-callback.example.yaml)).
 
 ## Configuration
@@ -354,6 +361,7 @@ aws cloudformation delete-stack --stack-name ai-spm-platform --region "$AWS_REGI
 # Optionally delete the ECR repositories: ai-spm-spm-api, ai-spm-spm-ui
 # The DynamoDB table KMS key (alias/ai-spm-spm-data) is retained on stack
 # deletion so backups stay decryptable; schedule its deletion when no longer needed.
+# The CloudFront access-log bucket is also retained; empty and delete it when done.
 ```
 
 ## License

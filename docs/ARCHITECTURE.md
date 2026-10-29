@@ -85,22 +85,43 @@ inputs and a per-IP rate limit.
 
 ## 6. Authentication & authorization
 
-Every `/spm/api/*` route validates a Cognito ID token (RS256 signature against
-the pool's JWKS, issuer, audience = app client ID, `token_use = id`, expiry).
+**Identity.** `infra/00-spm-identity.yaml` creates the Cognito user pool:
+self-registration off (`AllowAdminCreateUserOnly: true`), TOTP MFA required on
+every sign-in, 14-character password policy, 15-minute ID and access tokens and
+8-hour refresh tokens, and the `spm-admins` / `spm-viewers` groups. Stack 01
+imports the pool and client IDs, so the API always uses this pool.
+
+**Authentication (default deny).** `require_auth` is a global FastAPI
+dependency, so every route, including routes added later, validates a Cognito
+ID token (RS256 signature against the pool's JWKS, issuer, audience = app
+client ID, `token_use = id`, expiry) unless its path is in `PUBLIC_PATHS`
+(`/spm/health`, `/v1/chat/completions`, `/v1/models`). An unknown key ID
+triggers at most one JWKS refetch per minute, so key rotation needs no restart.
 The API fails closed: if `COGNITO_POOL_ID` / `COGNITO_CLIENT_ID` are unset,
 every request gets `503`. `SPM_AUTH_DISABLED=true` disables auth for local
-development only.
+development only; startup fails if it is set inside ECS or with a non-loopback
+bind (`python -m spm.api.serve`, which the image uses).
 
-Authorization uses the token's `cognito:groups` claim. Read requests need
-`spm-viewers` or `spm-admins`; all other methods (scans, evaluations, policy and
-defender changes, remediation, purge, red-team, integrations) need
-`spm-admins`. Allowed admin actions and all denials go to the `spm.audit` log
-with the user ID. The dashboard has no self-service sign-up; administrators
-create users. CORS is off unless `SPM_CORS_ORIGINS` lists exact origins.
+**Authorization.** The token's `cognito:groups` claim decides access. Read
+requests need `spm-viewers` or `spm-admins`; all other methods need
+`spm-admins`. `tests/test_route_auth.py` asserts that every non-public route
+returns 401 without a token and pins the list of GET routes, which must be
+read-only. Allowed admin actions and all denials go to the `spm.audit` log with
+the user ID. A user removed from a group keeps that group until their 15-minute
+ID token expires. CORS is off unless `SPM_CORS_ORIGINS` lists exact origins.
 
-The transparent proxy routes (`/v1/*`) are not routed by CloudFront; only
-callers inside the VPC reach them through Cloud Map, and they forward the
-caller's own bearer token to LiteLLM, which authenticates it.
+**Browser.** The UI middleware sends a per-request nonce-based CSP
+(`'strict-dynamic'`, `connect-src` limited to the origin and Cognito,
+`frame-ancestors 'none'`). A CloudFront response-headers policy adds HSTS,
+`nosniff`, `X-Frame-Options: DENY`, a referrer policy and a deny-all CSP for API
+responses. Tokens are kept in `sessionStorage`.
+
+**Transparent proxy.** The `/v1/*` routes are not routed by the ALB; only
+callers inside the VPC reach them through Cloud Map. `/v1/chat/completions`
+applies per-key and per-IP rate limits and validates the caller's key with
+LiteLLM (`GET /v1/models`, cached for 60 seconds) before any detector, runtime
+event, AIDR alert or Bedrock call. Post-response detection and the `llm_call`
+event happen only when LiteLLM returns 2xx.
 
 ## 7. IAM
 

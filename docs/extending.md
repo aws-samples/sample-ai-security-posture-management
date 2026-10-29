@@ -19,7 +19,7 @@ Inspect everything currently registered at runtime: `GET /spm/api/plugins`.
 ```bash
 # Comma-separated import paths; modules are imported at startup.
 export SPM_PLUGINS="acme.spm_detectors,acme.spm_rules"
-uvicorn spm.api.main:app --port 8001
+python -m spm.api.serve
 ```
 
 The module(s) must be importable on `PYTHONPATH` (e.g. `pip install` your

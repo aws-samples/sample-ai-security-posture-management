@@ -63,7 +63,7 @@ CloudFront distribution.
 | SPM API | ECS Fargate (FastAPI) | Discovery, policy evaluation, runtime monitoring, REST API |
 | SPM UI | ECS Fargate (Next.js) | Security dashboard |
 | Data | DynamoDB (4 tables) | Inventory, findings, policies, runtime events (TTL) |
-| Auth | Amazon Cognito | Dashboard authentication |
+| Auth | Amazon Cognito (created by the stack) | Dashboard/API authentication, admin-created users, TOTP MFA |
 | Edge | CloudFront + ALB | Dashboard delivery |
 | Telemetry | AWS X-Ray + ADOT | Trace ingestion and behavioral baselines |
 
@@ -82,7 +82,6 @@ This is an extension, so it requires an existing platform to monitor:
   creates its own ECS task execution role.
 - A **LiteLLM** proxy and (optionally) a **Temporal** server to discover.
 - **Amazon Bedrock** model access for the optional semantic injection classifier.
-- An **Amazon Cognito** user pool + app client for dashboard auth.
 - A **DNS domain** you control and two **ACM certificates**: one in `us-east-1`
   for the dashboard hostname (CloudFront), and one in your deployment Region for
   an origin hostname that points at your ALB. Traffic is HTTPS (TLS 1.2+) from
@@ -105,6 +104,7 @@ This is an extension, so it requires an existing platform to monitor:
 │   └── defender/              # runtime monitoring, detectors, correlation
 ├── spm-ui/                    # Next.js dashboard
 ├── infra/
+│   ├── 00-spm-identity.yaml   # Cognito user pool, app client, groups
 │   ├── 01-spm-platform.yaml   # tables, IAM, ECS services, target groups
 │   ├── 02-spm-cdn.yaml        # ALB listener + CloudFront
 │   └── 03-spm-waf.yaml        # AWS WAF web ACL for CloudFront (us-east-1)
@@ -135,11 +135,12 @@ export LITELLM_URL=http://localhost:4000
 export LITELLM_KEY=your-litellm-admin-key
 export TEMPORAL_ADDRESS=localhost:7233
 # Local development only: without Cognito the API rejects every request unless
-# you opt out explicitly. uvicorn binds to 127.0.0.1 by default; keep it that way.
+# you opt out explicitly. spm.api.serve binds to 127.0.0.1 and refuses to start
+# with auth off on any other address or inside ECS.
 export SPM_AUTH_DISABLED=true
 export SPM_CORS_ORIGINS=http://localhost:3001   # lets the local dashboard call the API
 
-uvicorn spm.api.main:app --reload --port 8001
+python -m spm.api.serve   # 127.0.0.1, port 8001
 # Health check:
 curl localhost:8001/spm/health
 ```
@@ -150,7 +151,7 @@ curl localhost:8001/spm/health
 cd spm-ui
 npm install
 export NEXT_PUBLIC_API_URL=http://localhost:8001
-export NEXT_PUBLIC_COGNITO_POOL_ID=...   # any Cognito pool/client (required to build)
+export NEXT_PUBLIC_COGNITO_POOL_ID=...   # e.g. outputs of the identity stack (required to build)
 export NEXT_PUBLIC_COGNITO_CLIENT_ID=...
 npm run dev   # http://localhost:3001
 ```
@@ -160,7 +161,7 @@ npm run dev   # http://localhost:3001
 ```bash
 cp .env.example .env
 # edit .env with your VPC, subnets, cluster, ALB, domain + ACM certificates,
-# Cognito, LiteLLM, etc.
+# LiteLLM, etc.
 source .env
 ./deploy.sh
 ```
@@ -179,6 +180,18 @@ AWS Secrets Manager, and deploys three CloudFormation stacks (platform, WAF in
 
 ### Users
 
+`infra/00-spm-identity.yaml` creates the Cognito user pool, already hardened:
+
+| Setting | Value |
+|---------|-------|
+| Self-registration | Off (`AllowAdminCreateUserOnly: true`): only administrators create users |
+| MFA | Required for every sign-in (TOTP authenticator app; SMS is not used) |
+| Password policy | 14+ characters with upper, lower, number and symbol; temporary passwords expire in 1 day |
+| ID / access token lifetime | 15 minutes, so removing a user from a group takes effect within 15 minutes |
+| Refresh token lifetime | 8 hours; then the user signs in again with MFA |
+| Groups | `spm-admins`, `spm-viewers` |
+| Deletion protection | On; the pool is retained when the stack is deleted |
+
 The API authorizes requests by Cognito group, read from the ID token:
 
 | Group | Access |
@@ -186,27 +199,21 @@ The API authorizes requests by Cognito group, read from the ID token:
 | `spm-viewers` | Read-only: dashboard, inventory, findings, policies, runtime events |
 | `spm-admins` | Everything, including scans, policy and defender changes, remediation, purge, red-team and integrations |
 
-Users in neither group get `403`. Override the names with `SPM_ADMIN_GROUP` /
-`SPM_VIEWER_GROUP`.
-
-In the Cognito console, turn off self-service sign-up for the user pool (sign-up
-experience: **Self-registration** off). Then create groups and users as an
-administrator:
+Users in neither group get `403`. Create a user and add them to a group:
 
 ```bash
-POOL="$COGNITO_USER_POOL_ID"
-aws cognito-idp create-group --user-pool-id "$POOL" --group-name spm-admins
-aws cognito-idp create-group --user-pool-id "$POOL" --group-name spm-viewers
+POOL=$(aws cloudformation describe-stacks --stack-name ai-spm-spm-identity --region "$AWS_REGION" \
+  --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' --output text)
 aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice@example.com \
   --user-attributes Name=email,Value=alice@example.com Name=email_verified,Value=true \
-  --message-action SUPPRESS
-# Prompts for the password so it doesn't land in shell history.
-read -rs -p "Password for alice: " PW; echo
-aws cognito-idp admin-set-user-password --user-pool-id "$POOL" \
-  --username alice@example.com --permanent --password "$PW"; unset PW
+  --desired-delivery-mediums EMAIL
 aws cognito-idp admin-add-user-to-group --user-pool-id "$POOL" \
   --username alice@example.com --group-name spm-admins
 ```
+
+Cognito emails a temporary password. On first sign-in the dashboard asks the
+user to set a permanent password and enroll an authenticator app; every later
+sign-in asks for a TOTP code.
 
 ## Configuration
 
@@ -219,9 +226,14 @@ All configuration is via environment variables (12-factor). Key ones:
 | `LITELLM_KEY` | _(empty)_ | LiteLLM admin key (deployed: injected from Secrets Manager) |
 | `TEMPORAL_ADDRESS` | `localhost:7233` | Temporal frontend address |
 | `AWS_REGION` | `us-east-1` | Region for boto3 clients |
-| `COGNITO_POOL_ID` / `COGNITO_CLIENT_ID` | _(empty)_ | Cognito auth (required; empty = every request rejected with 503) |
+| `COGNITO_POOL_ID` / `COGNITO_CLIENT_ID` | _(empty)_ | Cognito auth (set by the stack; empty = every request rejected with 503) |
 | `SPM_ADMIN_GROUP` / `SPM_VIEWER_GROUP` | `spm-admins` / `spm-viewers` | Cognito groups for full and read-only access |
-| `SPM_AUTH_DISABLED` | _(empty)_ | Set exactly `true` to turn auth off for **local development only** |
+| `SPM_AUTH_DISABLED` | _(empty)_ | Set exactly `true` to turn auth off for **local development only**; the API refuses to start this way in ECS or on a non-loopback bind |
+| `SPM_API_HOST` / `SPM_API_PORT` | `127.0.0.1` / `8001` | Bind address for `python -m spm.api.serve` (the container image sets `0.0.0.0`) |
+| `SPM_PROXY_RATE_LIMIT_PER_MIN` | `120` | Transparent proxy: requests per LiteLLM key per minute (per API task) |
+| `SPM_PROXY_IP_RATE_LIMIT_PER_MIN` | `600` | Transparent proxy: requests per client IP per minute (per API task) |
+| `SPM_PROXY_KEY_CACHE_SEC` | `60` | How long a LiteLLM-validated proxy key is trusted before it is checked again |
+| `SPM_API_DOCS` | _(empty)_ | Set `true` to serve `/docs` and `/openapi.json` (not routed by the ALB) |
 | `SPM_CORS_ORIGINS` | _(empty)_ | Comma-separated exact origins allowed by CORS (`*` is ignored) |
 | `SPM_CONFIG_FILE` | _(unset)_ | Path to JSON with `known_workflows` / `expected_dependencies` |
 | `SPM_MONITORED_SERVICES` | _(empty)_ | Comma-separated service-name filter for new-dependency alerts |
@@ -358,7 +370,7 @@ def scan_secrets(ctx):
 ```
 
 ```bash
-SPM_PLUGINS="acme.spm_plugins" uvicorn spm.api.main:app
+SPM_PLUGINS="acme.spm_plugins" python -m spm.api.serve
 ```
 
 Inspect everything that's loaded at `GET /spm/api/plugins`. Full guide:
@@ -379,13 +391,30 @@ scoring engine, and `db.py` against moto-mocked DynamoDB. CI runs on every push
 
 ## Security
 
-- **Authentication (fail closed):** The API requires a Cognito ID token on every
-  `/spm/api/*` route. If `COGNITO_POOL_ID`/`COGNITO_CLIENT_ID` are unset it
-  rejects every request with `503`. `SPM_AUTH_DISABLED=true` turns auth off for
-  local development only; never set it on a deployed or network-reachable API.
+- **Authentication (fail closed, default deny):** Authentication is a global
+  FastAPI dependency, so every route needs a Cognito ID token unless it is one of
+  three reviewed public paths (`/spm/health` and the VPC-only `/v1/*` proxy
+  routes). A test enumerates every route to enforce this. If
+  `COGNITO_POOL_ID`/`COGNITO_CLIENT_ID` are unset the API rejects every request
+  with `503`. `SPM_AUTH_DISABLED=true` turns auth off for local development
+  only; the API refuses to start that way inside ECS or on a non-loopback bind.
+- **Identity:** The stack creates the Cognito pool with self-registration off,
+  TOTP MFA required and 15-minute ID tokens (see [Users](#users)). Signing keys
+  are fetched again (at most once a minute) when a token has an unknown key ID.
 - **Authorization:** Read routes need the `spm-viewers` or `spm-admins` Cognito
   group; every state-changing or action-triggering route needs `spm-admins`.
-  Each allowed admin action and each denial is written to the `spm.audit` log.
+  A test pins GET routes to a reviewed read-only list. Each allowed admin action
+  and each denial is written to the `spm.audit` log.
+- **Transparent proxy:** `/v1/chat/completions` rate-limits per key and per IP
+  and validates the caller's key with LiteLLM before running any detector,
+  writing any event, sending any alert or calling Bedrock. Post-response
+  detection and events happen only when LiteLLM returns 2xx.
+- **Browser:** The dashboard sends a per-request nonce-based
+  Content-Security-Policy (`script-src 'nonce-…' 'strict-dynamic'`,
+  `connect-src` limited to the origin and Cognito, `frame-ancestors 'none'`).
+  CloudFront adds HSTS, `X-Content-Type-Options`, `X-Frame-Options: DENY` and a
+  referrer policy. Tokens are kept in `sessionStorage` (cleared when the tab
+  closes).
 - **Secrets:** The LiteLLM master key is stored in **AWS Secrets Manager** and
   injected into the API container by ECS at start; it is not a CloudFormation
   parameter and does not appear in the task definition.
@@ -419,6 +448,10 @@ report security issues.
 aws cloudformation delete-stack --stack-name ai-spm-cdn --region "$AWS_REGION"
 aws cloudformation delete-stack --stack-name ai-spm-waf --region us-east-1
 aws cloudformation delete-stack --stack-name ai-spm-platform --region "$AWS_REGION"
+aws cloudformation delete-stack --stack-name ai-spm-spm-identity --region "$AWS_REGION"
+# The Cognito user pool is retained with deletion protection on. To remove it,
+# turn deletion protection off in the Cognito console, then:
+#   aws cognito-idp delete-user-pool --user-pool-id <id>
 aws secretsmanager delete-secret --secret-id ai-spm/spm/litellm-master-key --region "$AWS_REGION"
 # Optionally delete the ECR repositories: ai-spm-spm-api, ai-spm-spm-ui
 # The KMS key (alias/ai-spm-spm-data) is retained on stack deletion so backups

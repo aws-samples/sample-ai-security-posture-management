@@ -83,12 +83,25 @@ port from the CloudFront origin-facing managed prefix list.
 
 The SPM task role grants:
 
-- DynamoDB CRUD on the four SPM tables and their indexes
-- X-Ray read (`GetTraceSummaries`, `BatchGetTraces`, `GetServiceGraph`) + segment write
-- Read-only discovery (`bedrock:ListAgents`, `bedrock:InvokeModel`,
-  `sagemaker:ListEndpoints`, `lambda:ListFunctions`, `cloudtrail:LookupEvents`)
+- DynamoDB CRUD on the four SPM tables and their indexes only, plus use of the
+  tables' customer managed KMS key only when DynamoDB calls KMS on the role's
+  behalf (`kms:ViaService`).
+- X-Ray segment and telemetry writes through the AWS managed
+  `AWSXRayDaemonWriteAccess` policy, and X-Ray read (`GetTraceSummaries`,
+  `BatchGetTraces`, `GetServiceGraph`).
+- `bedrock:InvokeModel` only on the classifier inference profile
+  (`ClassifierModelId`) and its foundation model (`ClassifierFoundationModelId`).
+- `bedrock:ApplyGuardrail` only on `BedrockGuardrailId`, and only when it is set.
+- `sns:Publish`, `events:PutEvents` and `securityhub:BatchImportFindings` only
+  on the topic, event bus and Security Hub product you configure, and only when
+  that integration is enabled.
+- Read-only discovery and inspection: Bedrock / AgentCore List and Get calls,
+  `sagemaker:ListEndpoints`, `lambda:ListFunctions`, `cloudtrail:LookupEvents`,
+  GuardDuty List/Get and IAM role/policy Get calls.
 
-Scope the `Resource: '*'` entries to your environment for least privilege.
+`Resource: '*'` is used only for the X-Ray read calls and the read-only
+discovery and inspection calls. Those actions list or describe resources
+across the account, so they can't be limited to ARNs known at deploy time.
 
 ## 7. Extensibility
 

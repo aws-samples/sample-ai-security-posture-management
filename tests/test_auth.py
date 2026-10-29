@@ -1,5 +1,6 @@
 """Tests for fail-closed Cognito authentication and group-based authorization."""
 import asyncio
+import secrets
 import time
 
 import pytest
@@ -21,6 +22,9 @@ POOL = "us-east-1_TESTPOOL1"
 CLIENT = "testclientid"
 REGION = "us-east-1"
 KID = "test-kid"
+# Cognito token_use claim values (token types, not credentials).
+ID_USE = "id"
+ACCESS_USE = "access"
 
 
 @pytest.fixture(scope="module")
@@ -56,7 +60,7 @@ def _token(priv, groups=None, **overrides):
     now = int(time.time())
     claims = {"sub": "user-1", "email": "u@example.com", "aud": CLIENT,
               "iss": f"https://cognito-idp.{REGION}.amazonaws.com/{POOL}",
-              "token_use": "id", "iat": now, "exp": now + 300}
+              "token_use": ID_USE, "iat": now, "exp": now + 300}
     if groups is not None:
         claims["cognito:groups"] = groups
     claims.update(overrides)
@@ -122,7 +126,8 @@ def test_wrong_audience_rejected(configured):
 
 
 def test_access_token_rejected(configured):
-    assert _status(_request(token=_token(configured, ["spm-admins"], token_use="access"))) == 401
+    assert _status(_request(token=_token(configured, ["spm-admins"],
+                                         token_use=ACCESS_USE))) == 401
 
 
 def test_expired_token_rejected(configured):
@@ -132,7 +137,10 @@ def test_expired_token_rejected(configured):
 
 
 def test_hs256_token_rejected(configured):
-    forged = jwt.encode({"sub": "x", "aud": CLIENT, "token_use": "id",
+    # Attacker-chosen HMAC key (random per run): an HS256 token must never be
+    # accepted, whatever key signed it.
+    attacker_key = secrets.token_urlsafe(32)
+    forged = jwt.encode({"sub": "x", "aud": CLIENT, "token_use": ID_USE,
                          "cognito:groups": ["spm-admins"]},
-                        "secret", algorithm="HS256", headers={"kid": KID})
+                        attacker_key, algorithm="HS256", headers={"kid": KID})
     assert _status(_request(token=forged)) == 401

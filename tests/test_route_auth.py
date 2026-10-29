@@ -42,17 +42,57 @@ def client(monkeypatch):
 
 
 def test_public_paths_are_exactly_the_reviewed_set():
-    assert auth.PUBLIC_PATHS == {"/spm/health", "/v1/chat/completions", "/v1/models"}
+    assert auth.PUBLIC_ROUTES == {
+        "/spm/health": {"GET", "HEAD"},
+        "/v1/chat/completions": {"POST"},
+        "/v1/models": {"GET", "HEAD"},
+    }
     paths = {r.path for r in _routes()}
     assert auth.PUBLIC_PATHS <= paths
+
+
+def test_public_paths_expose_only_their_reviewed_methods():
+    """R2: each public path's routes use only the methods PUBLIC_ROUTES allows."""
+    for route in _routes():
+        if route.path in auth.PUBLIC_ROUTES:
+            extra = route.methods - auth.PUBLIC_ROUTES[route.path]
+            assert not extra, f"{route.path} has unreviewed public methods {extra}"
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE", "PATCH"])
+def test_other_methods_on_public_paths_still_need_auth(method):
+    """R2: a method added later to a public path is not public."""
+    assert not auth.is_public("/spm/health", method)
+    assert not auth.is_public("/v1/models", method)
+    assert auth.is_public("/spm/health", "GET")
+    assert auth.is_public("/v1/chat/completions", "POST")
+    assert not auth.is_public("/v1/chat/completions", "GET")
+
+
+def test_new_method_on_public_path_requires_token(client):
+    """R2, end to end: register a POST on /spm/health and confirm it needs a token."""
+    from fastapi import APIRouter
+    router = APIRouter()
+
+    @router.post("/spm/health")
+    async def _probe():  # pragma: no cover - must never run without a token
+        return {"ran": True}
+
+    main.app.include_router(router)
+    try:
+        assert client.post("/spm/health").status_code == 401
+        assert client.get("/spm/health").status_code == 200
+    finally:
+        main.app.router.routes = [r for r in main.app.router.routes
+                                  if not (isinstance(r, APIRoute) and r.endpoint is _probe)]
 
 
 def test_every_non_public_route_requires_a_token(client):
     checked = 0
     for route in _routes():
-        if route.path in auth.PUBLIC_PATHS:
-            continue
         for method in route.methods - {"HEAD"}:
+            if auth.is_public(route.path, method):
+                continue
             resp = client.request(method, _concrete(route.path), json={})
             assert resp.status_code == 401, f"{method} {route.path} -> {resp.status_code}"
             checked += 1

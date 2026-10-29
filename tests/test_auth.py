@@ -53,10 +53,11 @@ def configured(monkeypatch, keypair):
     return keypair[0]
 
 
-def _request(method="GET", path="/spm/api/findings", token=None):
+def _request(method="GET", path="/spm/api/findings", token=None,
+             server=("127.0.0.1", 8001), client=("127.0.0.1", 50000)):
     headers = [(b"authorization", f"Bearer {token}".encode())] if token else []
     return Request({"type": "http", "method": method, "path": path, "headers": headers,
-                    "query_string": b""})
+                    "query_string": b"", "server": server, "client": client})
 
 
 def _token(priv, groups=None, **overrides):
@@ -98,6 +99,19 @@ def test_only_exact_opt_in_disables_auth(monkeypatch, value):
 def test_explicit_local_opt_in(monkeypatch):
     monkeypatch.setenv("SPM_AUTH_DISABLED", "true")
     assert _call(_request("POST", "/spm/api/remediate"))["user_id"] == "local-dev"
+
+
+@pytest.mark.parametrize("server,client", [
+    (("10.0.1.25", 8001), ("127.0.0.1", 50000)),   # bound to a network interface
+    (("127.0.0.1", 8001), ("10.0.1.99", 50000)),   # remote peer
+    (("192.168.1.10", 8001), ("192.168.1.20", 50000)),
+    (None, None),                                   # unknown connection
+])
+def test_auth_disabled_refuses_non_loopback_connections(monkeypatch, server, client):
+    """R1: the actual connection is checked per request, not just SPM_API_HOST."""
+    monkeypatch.setenv("SPM_AUTH_DISABLED", "true")
+    monkeypatch.delenv("SPM_API_HOST", raising=False)  # startup check would pass
+    assert _status(_request("POST", "/spm/api/remediate", server=server, client=client)) == 503
 
 
 def test_missing_token_is_401(configured):

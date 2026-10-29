@@ -2,15 +2,17 @@
 
 Enforcement is default-deny and app-wide: ``require_auth`` is registered as a
 global FastAPI dependency, so every route, including routes added later, needs
-a valid Cognito ID token unless its path is in ``PUBLIC_PATHS``. Handlers do
-not have to remember to call anything. ``tests/test_route_auth.py`` enumerates
-every route and asserts this.
+a valid Cognito ID token unless its (path, method) pair is in ``PUBLIC_ROUTES``.
+Handlers do not have to remember to call anything. ``tests/test_route_auth.py``
+enumerates every route, asserts this, and pins the methods of each public path.
 
 Authentication fails closed: if ``COGNITO_POOL_ID`` / ``COGNITO_CLIENT_ID`` are
 not set, every protected request is rejected with 503. For local development
-only, ``SPM_AUTH_DISABLED=true`` treats every caller as a local admin; the API
-refuses to start in that mode unless it is bound to loopback and not running in
-ECS (see ``assert_auth_disabled_is_local``).
+only, ``SPM_AUTH_DISABLED=true`` treats every caller as a local admin. Two
+checks keep that mode local: startup fails inside ECS or when ``SPM_API_HOST``
+is not loopback (``assert_auth_disabled_is_local``), and every request is
+refused unless both ends of its actual connection are loopback addresses
+(``_require_loopback_connection``), whatever address the server was bound to.
 
 Authorization uses Cognito groups from the ID token (``cognito:groups``):
 
@@ -54,16 +56,28 @@ COGNITO_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID", "")
 ADMIN_GROUP = os.getenv("SPM_ADMIN_GROUP", "spm-admins")
 VIEWER_GROUP = os.getenv("SPM_VIEWER_GROUP", "spm-viewers")
 
-# Routes that skip Cognito auth. Keep this list short and reviewed:
-#   /spm/health          fixed liveness response for the ALB health check
-#   /v1/chat/completions transparent LLM proxy; the caller's LiteLLM key is
-#                        rate-limited and validated against LiteLLM before any
-#                        detector, event or alert (spm.defender.proxy_guard)
-#   /v1/models           pass-through; LiteLLM authenticates the key, nothing
-#                        else runs
+# Routes that skip Cognito auth, keyed by path, with the only methods allowed
+# without a token. Any other method on these paths (for example a POST added to
+# /spm/health later) still requires auth. Keep this list short and reviewed:
+#   GET  /spm/health          fixed liveness response for the ALB health check
+#   POST /v1/chat/completions transparent LLM proxy; the caller's LiteLLM key is
+#                             rate-limited and validated against LiteLLM before
+#                             any detector, event or alert (spm.defender.proxy_guard)
+#   GET  /v1/models           pass-through; LiteLLM authenticates the key, nothing
+#                             else runs
 # The /v1/* routes are not routed by the ALB (only /spm/* is), so they are
 # reachable only from inside the VPC.
-PUBLIC_PATHS = frozenset({"/spm/health", "/v1/chat/completions", "/v1/models"})
+PUBLIC_ROUTES: dict[str, frozenset[str]] = {
+    "/spm/health": frozenset({"GET", "HEAD"}),
+    "/v1/chat/completions": frozenset({"POST"}),
+    "/v1/models": frozenset({"GET", "HEAD"}),
+}
+PUBLIC_PATHS = frozenset(PUBLIC_ROUTES)
+
+
+def is_public(path: str, method: str) -> bool:
+    """True only for a reviewed (path, method) pair in PUBLIC_ROUTES."""
+    return method.upper() in PUBLIC_ROUTES.get(path, frozenset())
 
 _READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 _JWKS_MIN_REFRESH_SEC = 60  # bound refetches triggered by unknown key IDs
@@ -146,8 +160,26 @@ def _authorize(request: Request, user: dict) -> dict:
     return user
 
 
+def _require_loopback_connection(request: Request) -> None:
+    """In auth-disabled mode, serve only connections that are loopback on both ends.
+
+    Reads the ASGI ``server`` (local socket address) and ``client`` (peer) of
+    the actual connection, so the check holds however the server was started,
+    including a direct uvicorn launch on all interfaces. Forwarded-header
+    handling cannot change ``server``, and a forwarded ``client`` must still be
+    loopback.
+    """
+    server = request.scope.get("server") or (None, None)
+    client = request.scope.get("client") or (None, None)
+    if not (server[0] and client[0] and _is_loopback(server[0]) and _is_loopback(client[0])):
+        audit_logger.warning("auth-disabled request refused: non-loopback connection "
+                             "server=%s client=%s path=%s", server[0], client[0], request.url.path)
+        raise HTTPException(status_code=503, detail="Authentication is not configured")
+
+
 async def _authenticate(request: Request) -> dict:
     if auth_disabled():
+        _require_loopback_connection(request)
         return {"user_id": "local-dev", "email": "local-dev", "groups": [ADMIN_GROUP]}
 
     if not COGNITO_POOL_ID or not COGNITO_CLIENT_ID:
@@ -209,7 +241,7 @@ async def get_current_user(request: Request) -> dict:
 
 
 async def require_auth(request: Request) -> None:
-    """Global dependency: every route except ``PUBLIC_PATHS`` needs auth."""
-    if request.url.path in PUBLIC_PATHS:
+    """Global dependency: every route except ``PUBLIC_ROUTES`` needs auth."""
+    if is_public(request.url.path, request.method):
         return
     await get_current_user(request)

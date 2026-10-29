@@ -87,20 +87,25 @@ inputs and a per-IP rate limit.
 
 **Identity.** `infra/00-spm-identity.yaml` creates the Cognito user pool:
 self-registration off (`AllowAdminCreateUserOnly: true`), TOTP MFA required on
-every sign-in, 14-character password policy, 15-minute ID and access tokens and
+every sign-in, Cognito threat protection enforced (Plus plan), 14-character
+password policy, 15-minute ID and access tokens and
 8-hour refresh tokens, and the `spm-admins` / `spm-viewers` groups. Stack 01
 imports the pool and client IDs, so the API always uses this pool.
 
 **Authentication (default deny).** `require_auth` is a global FastAPI
 dependency, so every route, including routes added later, validates a Cognito
 ID token (RS256 signature against the pool's JWKS, issuer, audience = app
-client ID, `token_use = id`, expiry) unless its path is in `PUBLIC_PATHS`
-(`/spm/health`, `/v1/chat/completions`, `/v1/models`). An unknown key ID
+client ID, `token_use = id`, expiry) unless its (path, method) pair is in
+`PUBLIC_ROUTES` (`GET /spm/health`, `POST /v1/chat/completions`,
+`GET /v1/models`); other methods on those paths still need a token. An unknown key ID
 triggers at most one JWKS refetch per minute, so key rotation needs no restart.
 The API fails closed: if `COGNITO_POOL_ID` / `COGNITO_CLIENT_ID` are unset,
 every request gets `503`. `SPM_AUTH_DISABLED=true` disables auth for local
 development only; startup fails if it is set inside ECS or with a non-loopback
-bind (`python -m spm.api.serve`, which the image uses).
+`SPM_API_HOST` (`python -m spm.api.serve`, which the image uses), and each
+request is refused unless its connection is loopback on both ends, so a direct
+uvicorn launch on all interfaces still cannot serve unauthenticated requests
+over the network.
 
 **Authorization.** The token's `cognito:groups` claim decides access. Read
 requests need `spm-viewers` or `spm-admins`; all other methods need

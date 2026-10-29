@@ -186,6 +186,7 @@ AWS Secrets Manager, and deploys three CloudFormation stacks (platform, WAF in
 |---------|-------|
 | Self-registration | Off (`AllowAdminCreateUserOnly: true`): only administrators create users |
 | MFA | Required for every sign-in (TOTP authenticator app; SMS is not used) |
+| Threat protection | `ENFORCED` by default: risky sign-ins are challenged or blocked and compromised credentials are detected. Needs the Cognito Plus plan (billed per monthly active user); set `SPM_COGNITO_THREAT_PROTECTION=AUDIT` or `OFF` to change it |
 | Password policy | 14+ characters with upper, lower, number and symbol; temporary passwords expire in 1 day |
 | ID / access token lifetime | 15 minutes, so removing a user from a group takes effect within 15 minutes |
 | Refresh token lifetime | 8 hours; then the user signs in again with MFA |
@@ -380,26 +381,34 @@ security platforms: [docs/comparison.md](docs/comparison.md).
 ## Testing
 
 ```bash
-pip install -e ".[dev]"
+pip install -r requirements-dev.txt   # test deps only; no pytest plugins needed
 pytest -q
 ```
 
-The suite covers the plugin registry, the detection logic against the red-team
-corpus (asserts ≥80% recall and 0 false positives on benign controls), the risk
-scoring engine, and `db.py` against moto-mocked DynamoDB. CI runs on every push
-(see `.github/workflows/tests.yml`).
+The suite (69 tests) covers authentication and authorization (real RS256
+tokens, every route without a token, the reviewed public routes and read-only
+GET routes, the auth-disabled loopback guards), the transparent proxy's key
+checks and rate limits, the plugin registry, the detection logic against the
+red-team corpus (asserts ≥80% recall and 0 false positives on benign controls),
+intent detection and Guardian decisions, the risk scoring engine, and `db.py`
+against moto-mocked DynamoDB. CI runs it on Python 3.11 to 3.14 on every push
+and pull request (see `.github/workflows/tests.yml`).
 
 ## Security
 
 - **Authentication (fail closed, default deny):** Authentication is a global
   FastAPI dependency, so every route needs a Cognito ID token unless it is one of
-  three reviewed public paths (`/spm/health` and the VPC-only `/v1/*` proxy
-  routes). A test enumerates every route to enforce this. If
+  three reviewed (path, method) pairs: `GET /spm/health`, and the VPC-only
+  `POST /v1/chat/completions` and `GET /v1/models`. Any other method on those
+  paths needs a token. Tests enumerate every route to enforce this. If
   `COGNITO_POOL_ID`/`COGNITO_CLIENT_ID` are unset the API rejects every request
   with `503`. `SPM_AUTH_DISABLED=true` turns auth off for local development
-  only; the API refuses to start that way inside ECS or on a non-loopback bind.
+  only; the API refuses to start that way inside ECS or on a non-loopback bind,
+  and in that mode it refuses every request whose connection is not loopback on
+  both ends, however the server was started.
 - **Identity:** The stack creates the Cognito pool with self-registration off,
-  TOTP MFA required and 15-minute ID tokens (see [Users](#users)). Signing keys
+  TOTP MFA required, threat protection enforced and 15-minute ID tokens (see
+  [Users](#users)). Signing keys
   are fetched again (at most once a minute) when a token has an unknown key ID.
 - **Authorization:** Read routes need the `spm-viewers` or `spm-admins` Cognito
   group; every state-changing or action-triggering route needs `spm-admins`.

@@ -1,4 +1,4 @@
-FROM node:20-alpine AS builder
+FROM public.ecr.aws/docker/library/node:20-alpine AS builder
 WORKDIR /app
 ARG NEXT_PUBLIC_COGNITO_POOL_ID
 ARG NEXT_PUBLIC_COGNITO_CLIENT_ID
@@ -11,7 +11,7 @@ RUN npm install
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine
+FROM public.ecr.aws/docker/library/node:20-alpine
 WORKDIR /app
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static

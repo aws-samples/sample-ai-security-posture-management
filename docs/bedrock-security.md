@@ -73,16 +73,21 @@ ensemble to quantify the improvement.
 ## IAM
 
 The SPM task role (see `infra/01-spm-platform.yaml`) grants read-only Bedrock
-posture access plus `bedrock:ApplyGuardrail`:
+posture access on `*` (these List/Get calls enumerate resources account-wide):
 
 ```
 bedrock:ListGuardrails, bedrock:GetGuardrail,
 bedrock:GetModelInvocationLoggingConfiguration,
 bedrock:ListKnowledgeBases, bedrock:GetKnowledgeBase,
-bedrock:ListAgents, bedrock:InvokeModel, bedrock:ApplyGuardrail
+bedrock:ListAgents
 ```
 
-Scope these to specific guardrail/KB/agent ARNs for least privilege.
+Model invocation and guardrail enforcement are scoped to the resources you
+configure at deploy time:
+
+* `bedrock:InvokeModel` only on the `ClassifierModelId` inference profile and
+  the `ClassifierFoundationModelId` foundation model.
+* `bedrock:ApplyGuardrail` only on `BedrockGuardrailId`, and only when it is set.
 
 ## Recommended hardening checklist
 

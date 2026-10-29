@@ -16,8 +16,13 @@ safe: if garak is not present, it returns guidance instead of failing.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+
+# garak probe specs are comma-separated module[.Class] names. Rejecting anything
+# else stops a caller from smuggling extra CLI flags (e.g. "--report_prefix").
+_PROBES_RE = re.compile(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*(,[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*)*$")
 
 
 def garak_available() -> bool:
@@ -32,7 +37,10 @@ def run_garak(rest_endpoint: str | None = None, probes: str = "promptinject,dan"
     caller is responsible for providing a valid garak REST generator config if a
     non-default endpoint is used.
     """
-    if not garak_available():
+    if not _PROBES_RE.fullmatch(probes or ""):
+        return {"status": "error", "error": "invalid probes; expected comma-separated garak probe names"}
+    garak = shutil.which("garak")
+    if not garak:
         return {
             "status": "garak_not_installed",
             "hint": "pip install 'ai-spm[redteam]' then point garak's REST generator "
@@ -41,8 +49,9 @@ def run_garak(rest_endpoint: str | None = None, probes: str = "promptinject,dan"
     endpoint = rest_endpoint or os.getenv("SPM_PROXY_URL", "http://localhost:8001/v1/chat/completions")
     try:
         # Minimal invocation; production use should supply a garak REST config file.
-        proc = subprocess.run(
-            ["garak", "--model_type", "rest", "--probes", probes],
+        # Argument list (no shell), resolved executable path, and validated probes.
+        proc = subprocess.run(  # nosec B603
+            [garak, "--model_type", "rest", "--probes", probes],
             capture_output=True, text=True, timeout=timeout_sec,
             env={**os.environ, "SPM_PROXY_URL": endpoint},
         )

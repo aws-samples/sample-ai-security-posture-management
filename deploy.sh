@@ -29,7 +29,13 @@ set -euo pipefail
 #     LITELLM_MASTER_KEY         LiteLLM admin key (NoEcho; prefer Secrets Manager in prod)
 #     TEMPORAL_ADDRESS           e.g. temporal.<ns>.local:7233
 #
-#   Optional:
+#   Optional (each grants the task role only the matching scoped permission):
+#     SPM_CLASSIFIER_MODEL_ID    Bedrock model / inference profile for classifiers
+#     SPM_CLASSIFIER_FOUNDATION_MODEL_ID  foundation model behind that profile
+#     SPM_BEDROCK_GUARDRAIL_ID   guardrail for proxy enforcement (+ _VERSION)
+#     SPM_SNS_TOPIC_ARN          SNS topic for high-severity alerts
+#     SPM_EVENT_BUS_NAME         EventBridge bus for high-severity events
+#     SPM_SECURITY_HUB_ENABLED   "true" exports findings to Security Hub
 #     ENV_NAME                   resource/table prefix (default: ai-spm)
 #     SPM_LISTENER_PORT          dedicated ALB listener port (default: 8090)
 # ============================================================
@@ -51,6 +57,17 @@ COGNITO_CLIENT_ID="${COGNITO_CLIENT_ID:-}"
 LITELLM_URL="${LITELLM_URL:-}"
 LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
 TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-}"
+SPM_CLASSIFIER_MODEL_ID="${SPM_CLASSIFIER_MODEL_ID:-us.anthropic.claude-3-5-haiku-20241022-v1:0}"
+SPM_CLASSIFIER_FOUNDATION_MODEL_ID="${SPM_CLASSIFIER_FOUNDATION_MODEL_ID:-anthropic.claude-3-5-haiku-20241022-v1:0}"
+SPM_BEDROCK_GUARDRAIL_ID="${SPM_BEDROCK_GUARDRAIL_ID:-}"
+SPM_BEDROCK_GUARDRAIL_VERSION="${SPM_BEDROCK_GUARDRAIL_VERSION:-DRAFT}"
+SPM_SNS_TOPIC_ARN="${SPM_SNS_TOPIC_ARN:-}"
+SPM_EVENT_BUS_NAME="${SPM_EVENT_BUS_NAME:-}"
+SPM_SECURITY_HUB_ENABLED="${SPM_SECURITY_HUB_ENABLED:-false}"
+case "$SPM_SECURITY_HUB_ENABLED" in
+  1|true|TRUE|yes|YES) SPM_SECURITY_HUB_ENABLED=true ;;
+  *) SPM_SECURITY_HUB_ENABLED=false ;;
+esac
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ECR="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
@@ -109,7 +126,14 @@ aws cloudformation deploy \
     "CognitoClientId=${COGNITO_CLIENT_ID}" \
     "LiteLLMUrl=${LITELLM_URL}" \
     "LiteLLMMasterKey=${LITELLM_MASTER_KEY}" \
-    "TemporalAddress=${TEMPORAL_ADDRESS}"
+    "TemporalAddress=${TEMPORAL_ADDRESS}" \
+    "ClassifierModelId=${SPM_CLASSIFIER_MODEL_ID}" \
+    "ClassifierFoundationModelId=${SPM_CLASSIFIER_FOUNDATION_MODEL_ID}" \
+    "BedrockGuardrailId=${SPM_BEDROCK_GUARDRAIL_ID}" \
+    "BedrockGuardrailVersion=${SPM_BEDROCK_GUARDRAIL_VERSION}" \
+    "AlertsSnsTopicArn=${SPM_SNS_TOPIC_ARN}" \
+    "AlertsEventBusName=${SPM_EVENT_BUS_NAME}" \
+    "SecurityHubExportEnabled=${SPM_SECURITY_HUB_ENABLED}"
 
 echo "=== Step 4: Deploy stack 02 (CDN) ==="
 aws cloudformation deploy \

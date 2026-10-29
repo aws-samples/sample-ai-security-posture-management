@@ -335,8 +335,13 @@ scoring engine, and `db.py` against moto-mocked DynamoDB. CI runs on every push
   to your dashboard origin before production use.
 - **Enforce mode:** Inline blocking (`/spm/api/defender/mode` = `enforce`) can
   reject live LLM traffic. Validate detection rules in `monitor` mode first.
-- **Least privilege:** Review the IAM policy in `infra/01-spm-platform.yaml` and
-  scope `Resource: '*'` entries (X-Ray, discovery) to your needs.
+- **Least privilege:** Write actions on the SPM task role are scoped to specific
+  resources (DynamoDB tables, the KMS table key, the classifier model, and the
+  guardrail / SNS topic / EventBridge bus / Security Hub product you configure).
+  `Resource: '*'` remains only on read-only discovery, X-Ray read, IAM read and
+  GuardDuty read actions, which enumerate resources account-wide.
+- **Data protection:** The SPM DynamoDB tables are encrypted with a customer
+  managed KMS key (rotation enabled) and have point-in-time recovery enabled.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md#security-issue-notifications) for how to
 report security issues.
@@ -347,6 +352,8 @@ report security issues.
 aws cloudformation delete-stack --stack-name ai-spm-cdn --region "$AWS_REGION"
 aws cloudformation delete-stack --stack-name ai-spm-platform --region "$AWS_REGION"
 # Optionally delete the ECR repositories: ai-spm-spm-api, ai-spm-spm-ui
+# The DynamoDB table KMS key (alias/ai-spm-spm-data) is retained on stack
+# deletion so backups stay decryptable; schedule its deletion when no longer needed.
 ```
 
 ## License

@@ -124,7 +124,10 @@ if _LLM_GUARD_SECRETS:
         try:
             _, is_valid, risk = _get_secrets_scanner().scan(ctx.prompt_text)
         except Exception as e:
-            logger.warning("LLM Guard secrets scan failed: %s", e)
+            # Log only the exception type: scanner errors can echo prompt text,
+            # which is the very content that may hold a secret.
+            logger.warning("LLM Guard scan failed (scanner=%s, error=%s)",
+                           "Secrets", type(e).__name__)
             return []
         if not is_valid:
             return [Detection("secret_in_prompt", "high",

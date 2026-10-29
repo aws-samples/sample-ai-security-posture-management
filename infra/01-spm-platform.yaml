@@ -66,16 +66,99 @@ Parameters:
     Default: ''
     Description: Temporal frontend address, e.g. temporal.<namespace>.local:7233
 
+  ClassifierModelId:
+    Type: String
+    Default: us.anthropic.claude-3-5-haiku-20241022-v1:0
+    Description: >
+      Bedrock model or cross-Region inference profile ID used by the semantic
+      injection and intent classifiers (SPM_CLASSIFIER_MODEL_ID). The task role
+      may invoke only this ID and ClassifierFoundationModelId.
+  ClassifierFoundationModelId:
+    Type: String
+    Default: anthropic.claude-3-5-haiku-20241022-v1:0
+    Description: >
+      Foundation model behind ClassifierModelId. When ClassifierModelId is an
+      inference profile, Bedrock also authorizes the underlying foundation model
+      in every Region the profile routes to.
+  BedrockGuardrailId:
+    Type: String
+    Default: ''
+    Description: >
+      Bedrock guardrail ID for proxy enforcement (SPM_BEDROCK_GUARDRAIL_ID).
+      Leave blank to disable; bedrock:ApplyGuardrail is granted only on this ID.
+  BedrockGuardrailVersion:
+    Type: String
+    Default: DRAFT
+    Description: Bedrock guardrail version (SPM_BEDROCK_GUARDRAIL_VERSION).
+  AlertsSnsTopicArn:
+    Type: String
+    Default: ''
+    Description: >
+      SNS topic ARN for high-severity alerts (SPM_SNS_TOPIC_ARN). Leave blank to
+      disable; sns:Publish is granted only on this topic.
+  AlertsEventBusName:
+    Type: String
+    Default: ''
+    Description: >
+      EventBridge bus name for high-severity events (SPM_EVENT_BUS_NAME), e.g.
+      default. Leave blank to disable; events:PutEvents is granted only on this bus.
+  SecurityHubExportEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Export findings to AWS Security Hub (SPM_SECURITY_HUB_ENABLED).
+      securityhub:BatchImportFindings is granted only on this account's default
+      product ARN in this Region.
+
 Conditions:
   HasCognito: !Not [!Equals [!Ref CognitoUserPoolId, '']]
+  HasGuardrail: !Not [!Equals [!Ref BedrockGuardrailId, '']]
+  HasSnsTopic: !Not [!Equals [!Ref AlertsSnsTopicArn, '']]
+  HasEventBus: !Not [!Equals [!Ref AlertsEventBusName, '']]
+  HasSecurityHub: !Equals [!Ref SecurityHubExportEnabled, 'true']
 
 Resources:
+  # ============ Encryption key for SPM data ============
+  # Customer managed key for the SPM DynamoDB tables (inventory, findings and
+  # runtime events can contain prompt fragments and agent configuration).
+  SPMDataKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub ${EnvironmentName} AI SPM DynamoDB table encryption
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          # Account-level administration; usage is granted through IAM policies
+          # (see SPMTaskRole) and is limited to DynamoDB via kms:ViaService.
+          - Sid: EnableIamPolicies
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: '*'
+
+  SPMDataKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${EnvironmentName}-spm-data
+      TargetKeyId: !Ref SPMDataKey
+
   # ============ DynamoDB Tables ============
   SPMInventoryTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub ${EnvironmentName}-spm-inventory
       BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref SPMDataKey
       AttributeDefinitions:
         - AttributeName: agent_id
           AttributeType: S
@@ -97,6 +180,12 @@ Resources:
     Properties:
       TableName: !Sub ${EnvironmentName}-spm-findings
       BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref SPMDataKey
       AttributeDefinitions:
         - AttributeName: finding_id
           AttributeType: S
@@ -118,6 +207,12 @@ Resources:
     Properties:
       TableName: !Sub ${EnvironmentName}-spm-policies
       BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref SPMDataKey
       AttributeDefinitions:
         - AttributeName: policy_id
           AttributeType: S
@@ -130,6 +225,12 @@ Resources:
     Properties:
       TableName: !Sub ${EnvironmentName}-spm-runtime-events
       BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref SPMDataKey
       AttributeDefinitions:
         - AttributeName: event_id
           AttributeType: S
@@ -161,6 +262,10 @@ Resources:
             Principal:
               Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # X-Ray segment/telemetry writes don't support resource-level
+        # permissions; use the AWS managed policy built for this purpose.
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSXRayDaemonWriteAccess
       Policies:
         - PolicyName: DynamoDBAccess
           PolicyDocument:
@@ -182,7 +287,23 @@ Resources:
                   - !GetAtt SPMPoliciesTable.Arn
                   - !GetAtt SPMRuntimeEventsTable.Arn
                   - !Sub ${SPMRuntimeEventsTable.Arn}/index/*
-        - PolicyName: XRayReadAndTrace
+              # Use of the table key, only when DynamoDB calls KMS on our behalf.
+              - Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                  - kms:DescribeKey
+                  - kms:CreateGrant
+                Resource: !GetAtt SPMDataKey.Arn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub dynamodb.${AWS::Region}.amazonaws.com
+                    kms:CallerAccount: !Ref AWS::AccountId
+        - PolicyName: XRayRead
+          # X-Ray read APIs used by the trace analyzer; they don't support
+          # resource-level permissions.
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -191,22 +312,18 @@ Resources:
                   - xray:GetTraceSummaries
                   - xray:BatchGetTraces
                   - xray:GetServiceGraph
-                  - xray:PutTraceSegments
-                  - xray:PutTelemetryRecords
-                  - xray:GetSamplingRules
-                  - xray:GetSamplingTargets
                 Resource: '*'
         - PolicyName: DiscoveryReadOnly
           # Read-only discovery of AI resources (Bedrock agents, SageMaker
           # endpoints, AI Lambdas, and shadow-AI detection via CloudTrail).
+          # These List/Get/Lookup actions enumerate resources account-wide, so
+          # they need Resource '*'. No write actions belong in this policy.
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
                   - bedrock:ListAgents
-                  - bedrock:InvokeModel
-                  - bedrock:ApplyGuardrail
                   - bedrock:ListGuardrails
                   - bedrock:GetGuardrail
                   - bedrock:GetModelInvocationLoggingConfiguration
@@ -221,25 +338,55 @@ Resources:
                   - lambda:ListFunctions
                   - cloudtrail:LookupEvents
                 Resource: '*'
-        - PolicyName: AidrIntegrations
-          # AI Detection & Response: export findings to Security Hub and emit
-          # high-severity alerts to SNS / EventBridge. Scope these to your
-          # specific topic / bus / Security Hub ARNs for least privilege.
+        - PolicyName: BedrockClassifierAndGuardrail
+          # Model invocation for the semantic-injection and intent classifiers,
+          # scoped to the configured model/inference profile, plus guardrail
+          # enforcement scoped to the configured guardrail (only if set).
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - securityhub:BatchImportFindings
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - sns:Publish
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - events:PutEvents
-                Resource: '*'
+                  - bedrock:InvokeModel
+                Resource:
+                  - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${ClassifierModelId}
+                  - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/${ClassifierFoundationModelId}
+              - !If
+                - HasGuardrail
+                - Effect: Allow
+                  Action:
+                    - bedrock:ApplyGuardrail
+                  Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:guardrail/${BedrockGuardrailId}
+                - !Ref AWS::NoValue
+        - PolicyName: AidrIntegrations
+          # AI Detection & Response. Each write action is granted only when its
+          # integration is configured, and only on that integration's resource.
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - !If
+                - HasSecurityHub
+                - Effect: Allow
+                  Action:
+                    - securityhub:BatchImportFindings
+                  Resource: !Sub arn:${AWS::Partition}:securityhub:${AWS::Region}:${AWS::AccountId}:product/${AWS::AccountId}/default
+                - !Ref AWS::NoValue
+              - !If
+                - HasSnsTopic
+                - Effect: Allow
+                  Action:
+                    - sns:Publish
+                  Resource: !Ref AlertsSnsTopicArn
+                - !Ref AWS::NoValue
+              - !If
+                - HasEventBus
+                - Effect: Allow
+                  Action:
+                    - events:PutEvents
+                  Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${AlertsEventBusName}
+                - !Ref AWS::NoValue
+              # GuardDuty AI Protection ingestion: read-only list/get across
+              # the account's detectors, so Resource '*' is required.
               - Effect: Allow
                 Action:
                   - guardduty:ListDetectors
@@ -330,6 +477,18 @@ Resources:
               Value: !Ref CognitoUserPoolId
             - Name: COGNITO_CLIENT_ID
               Value: !Ref CognitoClientId
+            - Name: SPM_CLASSIFIER_MODEL_ID
+              Value: !Ref ClassifierModelId
+            - Name: SPM_BEDROCK_GUARDRAIL_ID
+              Value: !Ref BedrockGuardrailId
+            - Name: SPM_BEDROCK_GUARDRAIL_VERSION
+              Value: !Ref BedrockGuardrailVersion
+            - Name: SPM_SNS_TOPIC_ARN
+              Value: !Ref AlertsSnsTopicArn
+            - Name: SPM_EVENT_BUS_NAME
+              Value: !Ref AlertsEventBusName
+            - Name: SPM_SECURITY_HUB_ENABLED
+              Value: !Ref SecurityHubExportEnabled
             - Name: OTEL_EXPORTER_OTLP_ENDPOINT
               Value: http://localhost:4317
             - Name: OTEL_SERVICE_NAME

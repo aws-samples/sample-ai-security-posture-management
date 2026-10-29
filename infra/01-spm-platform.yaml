@@ -3,7 +3,8 @@ Description: >
   AI SPM - DynamoDB tables, SPM API + UI ECS Fargate services, IAM task role, and
   ALB target groups. Deploys as an extension into an EXISTING VPC / ECS cluster /
   ALB / Cloud Map namespace that already runs your AI platform (LiteLLM + Temporal
-  + X-Ray). All environment-specific values are passed as parameters.
+  + X-Ray). All environment-specific values are passed as parameters. Requires
+  00-spm-identity.yaml (same EnvironmentName and Region) for the Cognito pool.
 
 Parameters:
   EnvironmentName:
@@ -33,18 +34,6 @@ Parameters:
   ServiceDiscoveryNamespaceId:
     Type: String
     Description: Cloud Map private DNS namespace ID for service discovery.
-
-  CognitoUserPoolId:
-    Type: String
-    AllowedPattern: '^[a-z]{2}(-[a-z]+)+-[0-9]_[A-Za-z0-9]+$'
-    Description: >
-      Cognito user pool ID for dashboard and API authentication (required; the
-      API rejects every request when it is not configured). Create users as an
-      administrator and add them to the spm-admins or spm-viewers group.
-  CognitoClientId:
-    Type: String
-    AllowedPattern: '^[A-Za-z0-9]{1,128}$'
-    Description: Cognito app client ID for the dashboard (required).
 
   LiteLLMUrl:
     Type: String
@@ -525,9 +514,11 @@ Resources:
             - Name: SPM_RUNTIME_TABLE
               Value: !Ref SPMRuntimeEventsTable
             - Name: COGNITO_POOL_ID
-              Value: !Ref CognitoUserPoolId
+              Value: !ImportValue
+                Fn::Sub: ${EnvironmentName}-SPMUserPoolId
             - Name: COGNITO_CLIENT_ID
-              Value: !Ref CognitoClientId
+              Value: !ImportValue
+                Fn::Sub: ${EnvironmentName}-SPMUserPoolClientId
             - Name: SPM_CLASSIFIER_MODEL_ID
               Value: !Ref ClassifierModelId
             - Name: SPM_BEDROCK_GUARDRAIL_ID

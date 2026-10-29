@@ -4,10 +4,11 @@ set -euo pipefail
 # ============================================================
 # AI SPM - Deployment script
 # ============================================================
-# Builds the SPM API + UI container images, pushes them to ECR, stores the
-# LiteLLM key in AWS Secrets Manager, and deploys the CloudFormation stacks as an
-# extension into your EXISTING AWS environment (VPC, ECS cluster, ALB, Cloud Map
-# namespace) that runs your AI platform.
+# Creates the Cognito user pool (stack 00), builds the SPM API + UI container
+# images, pushes them to ECR, stores the LiteLLM key in AWS Secrets Manager, and
+# deploys the remaining CloudFormation stacks as an extension into your EXISTING
+# AWS environment (VPC, ECS cluster, ALB, Cloud Map namespace) that runs your AI
+# platform.
 #
 # Configure via environment variables (or copy .env.example to .env and source
 # it before running):
@@ -20,8 +21,6 @@ set -euo pipefail
 #     ECS_SECURITY_GROUP_ID      sg-... applied to the SPM tasks
 #     SERVICE_DISCOVERY_NS_ID    Cloud Map private namespace ID (ns-...)
 #     ALB_ARN                    arn:aws:elasticloadbalancing:...
-#     COGNITO_USER_POOL_ID       Cognito user pool for dashboard/API auth
-#     COGNITO_CLIENT_ID          Cognito app client ID
 #     SPM_DASHBOARD_DOMAIN       dashboard hostname, e.g. spm.example.com
 #     SPM_CLOUDFRONT_CERT_ARN    ACM cert in us-east-1 covering SPM_DASHBOARD_DOMAIN
 #     SPM_ORIGIN_DOMAIN          DNS name aliased to the ALB, e.g. spm-origin.example.com
@@ -55,8 +54,6 @@ set -euo pipefail
 : "${ECS_SECURITY_GROUP_ID:?Set ECS_SECURITY_GROUP_ID}"
 : "${SERVICE_DISCOVERY_NS_ID:?Set SERVICE_DISCOVERY_NS_ID}"
 : "${ALB_ARN:?Set ALB_ARN}"
-: "${COGNITO_USER_POOL_ID:?Set COGNITO_USER_POOL_ID (the API rejects all requests without it)}"
-: "${COGNITO_CLIENT_ID:?Set COGNITO_CLIENT_ID}"
 : "${SPM_DASHBOARD_DOMAIN:?Set SPM_DASHBOARD_DOMAIN (e.g. spm.example.com)}"
 : "${SPM_CLOUDFRONT_CERT_ARN:?Set SPM_CLOUDFRONT_CERT_ARN (ACM cert in us-east-1)}"
 : "${SPM_ORIGIN_DOMAIN:?Set SPM_ORIGIN_DOMAIN (DNS name aliased to the ALB)}"
@@ -95,6 +92,21 @@ echo "    Region:   $AWS_REGION"
 echo "    Env:      $ENV_NAME"
 echo "    Builder:  $CONTAINER_CMD"
 echo "============================================"
+
+# ============ Step 0: Cognito user pool ============
+# Self-registration off, TOTP MFA required, 15-minute ID tokens. The UI image is
+# built with these IDs and stack 01 imports them.
+echo "=== Step 0: Deploy stack 00 (identity) ==="
+aws cloudformation deploy \
+  --stack-name "${ENV_NAME}-spm-identity" \
+  --template-file "$SCRIPT_DIR/infra/00-spm-identity.yaml" \
+  --region "$AWS_REGION" \
+  --no-fail-on-empty-changeset \
+  --parameter-overrides "EnvironmentName=${ENV_NAME}"
+COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}-spm-identity" --region "$AWS_REGION" \
+  --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' --output text)
+COGNITO_CLIENT_ID=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}-spm-identity" --region "$AWS_REGION" \
+  --query 'Stacks[0].Outputs[?OutputKey==`UserPoolClientId`].OutputValue' --output text)
 
 # ============ Step 1: ECR repositories ============
 echo "=== Step 1: ECR repositories ==="
@@ -160,8 +172,6 @@ aws cloudformation deploy \
     "EcsClusterName=${ECS_CLUSTER_NAME}" \
     "EcsSecurityGroupId=${ECS_SECURITY_GROUP_ID}" \
     "ServiceDiscoveryNamespaceId=${SERVICE_DISCOVERY_NS_ID}" \
-    "CognitoUserPoolId=${COGNITO_USER_POOL_ID}" \
-    "CognitoClientId=${COGNITO_CLIENT_ID}" \
     "LiteLLMUrl=${LITELLM_URL}" \
     "LiteLLMKeySecretArn=${SPM_LITELLM_KEY_SECRET_ARN}" \
     "TemporalAddress=${TEMPORAL_ADDRESS}" \
@@ -217,7 +227,8 @@ echo "    ${SPM_ORIGIN_DOMAIN} -> your ALB DNS name (CNAME / Route 53 alias)"
 echo ""
 echo "  Users: create them as an administrator in user pool ${COGNITO_USER_POOL_ID}"
 echo "  and add each to the spm-admins (full access) or spm-viewers (read-only)"
-echo "  group. Disable self-service sign-up on the pool. See README > Users."
+echo "  group. Each user sets a password and enrolls TOTP MFA at first sign-in."
+echo "  See README > Users."
 echo ""
 echo "  Reminder: allow inbound on port ${SPM_LISTENER_PORT} on the ALB security"
 echo "  group from the CloudFront origin-facing managed prefix list, and register"

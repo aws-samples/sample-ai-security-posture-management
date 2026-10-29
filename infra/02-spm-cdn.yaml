@@ -154,6 +154,37 @@ Resources:
               Bool:
                 aws:SecureTransport: 'false'
 
+  # ============ Security response headers ============
+  # HSTS, nosniff, frame and referrer headers are always set. The CSP here is
+  # a deny-all fallback and does not override the origin: the SPM UI sends its
+  # own per-request nonce-based CSP (spm-ui/src/middleware.ts), and API JSON
+  # responses get this one.
+  SPMSecurityHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub ${EnvironmentName}-spm-security-headers
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+            Override: false
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 63072000
+            IncludeSubdomains: true
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+        RemoveHeadersConfig:
+          Items:
+            - Header: Server
+            - Header: X-Powered-By
+
   # ============ CloudFront Distribution ============
   # CachePolicyId / OriginRequestPolicyId below are AWS-managed policies:
   #   4135ea2d-6df8-44a3-9df3-4b5a84be39ad = CachingDisabled
@@ -186,6 +217,7 @@ Resources:
           CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
           OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
           Compress: true
+          ResponseHeadersPolicyId: !Ref SPMSecurityHeadersPolicy
         CacheBehaviors:
           - PathPattern: /spm/*
             TargetOriginId: spm-origin
@@ -195,6 +227,7 @@ Resources:
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
             Compress: true
+            ResponseHeadersPolicyId: !Ref SPMSecurityHeadersPolicy
           - PathPattern: /_next/static/*
             TargetOriginId: spm-origin
             ViewerProtocolPolicy: redirect-to-https
@@ -202,6 +235,7 @@ Resources:
             CachedMethods: [GET, HEAD]
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
             Compress: true
+            ResponseHeadersPolicyId: !Ref SPMSecurityHeadersPolicy
         Origins:
           - Id: spm-origin
             DomainName: !Ref OriginDomainName

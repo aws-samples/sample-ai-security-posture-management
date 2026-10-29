@@ -13,13 +13,17 @@ events, send AIDR alerts or call Bedrock for a caller LiteLLM would reject.
    caches a successful result for ``SPM_PROXY_KEY_CACHE_SEC`` (default 60).
 
 Rejected keys are never cached, so a revoked key stops working within the cache
-TTL. Keys are held only as SHA-256 fingerprints. If LiteLLM runs without
-authentication it accepts any key, and so does this check.
+TTL. Callers are tracked only by an HMAC-SHA256 fingerprint of their key,
+keyed with a random per-process secret. The fingerprint is an in-memory cache
+and rate-limit key, not a stored credential: it is never persisted or compared
+against a stored value, and it is meaningless outside this process. If LiteLLM
+runs without authentication it accepts any key, and so does this check.
 """
 from __future__ import annotations
 
-import hashlib
+import hmac
 import os
+import secrets
 import time
 from collections import OrderedDict, deque
 
@@ -29,6 +33,7 @@ from fastapi import HTTPException
 from spm.core.auth import audit_logger
 
 _CACHE_MAX = 10_000
+_FINGERPRINT_SECRET = secrets.token_bytes(32)  # per process, never logged or stored
 _valid_until: "OrderedDict[str, float]" = OrderedDict()
 _hits: "OrderedDict[str, deque]" = OrderedDict()
 
@@ -46,7 +51,8 @@ def _cache_ttl() -> float:
 
 
 def fingerprint(api_key: str) -> str:
-    return hashlib.sha256(api_key.encode()).hexdigest()
+    """Keyed, per-process identifier for an API key (cache and rate-limit key only)."""
+    return hmac.new(_FINGERPRINT_SECRET, api_key.encode(), "sha256").hexdigest()
 
 
 def _check_rate(bucket: str, limit: int, now: float) -> None:

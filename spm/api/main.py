@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from spm.core.auth import require_auth
 from spm.core.tracing import init_tracing
 from spm.core import db
+from spm.core.errors import public_error
+from spm.core.models import RuntimeEvent
 
 tracer = trace.get_tracer("spm.api")
 
@@ -473,8 +475,8 @@ async def auto_remediate(body: RemediationAction, req: Request):
                     json={"keys": [body.target]})
                 result["success"] = resp.status_code == 200
                 result["detail"] = "Key disabled"
-        except Exception as e:
-            result["error"] = str(e)
+        except Exception:
+            result["error"] = public_error("disable_key")
 
     elif body.action == "quarantine_agent":
         # Stop the Temporal workflow
@@ -485,8 +487,8 @@ async def auto_remediate(body: RemediationAction, req: Request):
             await handle.terminate(reason=f"SPM quarantine: {body.reason}")
             result["success"] = True
             result["detail"] = "Workflow terminated"
-        except Exception as e:
-            result["error"] = str(e)
+        except Exception:
+            result["error"] = public_error("quarantine_agent")
 
     elif body.action == "revoke_model_access":
         try:
@@ -496,8 +498,8 @@ async def auto_remediate(body: RemediationAction, req: Request):
                     json={"key": body.target, "models": []})
                 result["success"] = resp.status_code == 200
                 result["detail"] = "Model access revoked"
-        except Exception as e:
-            result["error"] = str(e)
+        except Exception:
+            result["error"] = public_error("revoke_model_access")
 
     # Log remediation
     event = RuntimeEvent(

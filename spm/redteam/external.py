@@ -20,6 +20,8 @@ import re
 import shutil
 import subprocess
 
+from spm.core.errors import public_error
+
 # garak probe specs are comma-separated module[.Class] names. Rejecting anything
 # else stops a caller from smuggling extra CLI flags (e.g. "--report_prefix").
 _PROBES_RE = re.compile(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*(,[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*)*$")
@@ -58,5 +60,5 @@ def run_garak(rest_endpoint: str | None = None, probes: str = "promptinject,dan"
                 "stdout_tail": proc.stdout[-4000:], "stderr_tail": proc.stderr[-2000:]}
     except subprocess.TimeoutExpired:
         return {"status": "timeout", "timeout_sec": timeout_sec}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    except Exception:
+        return {"status": "error", "error": public_error("garak run")}

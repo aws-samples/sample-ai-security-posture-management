@@ -22,6 +22,7 @@ import boto3
 
 from spm.core import db
 from spm.core.models import Finding
+from spm.core.errors import public_error
 
 REGION = os.getenv("AWS_REGION", "us-east-1")
 # GuardDuty finding "type" substrings that indicate AI/Bedrock threats.
@@ -80,8 +81,8 @@ def ingest(max_findings: int = 100) -> dict:
     try:
         gd = boto3.client("guardduty", region_name=REGION)
         detectors = gd.list_detectors().get("DetectorIds", [])
-    except Exception as e:
-        return {"integration": "guardduty", "error": f"init failed: {e}"}
+    except Exception:
+        return {"integration": "guardduty", "error": public_error("guardduty init")}
     if not detectors:
         return {"integration": "guardduty", "detectors": 0, "ingested": 0}
 

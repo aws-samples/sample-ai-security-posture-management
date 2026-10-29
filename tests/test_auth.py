@@ -144,3 +144,61 @@ def test_hs256_token_rejected(configured):
                          "cognito:groups": ["spm-admins"]},
                         attacker_key, algorithm="HS256", headers={"kid": KID})
     assert _status(_request(token=forged)) == 401
+
+
+def test_rotated_signing_key_is_fetched_once(configured, monkeypatch, keypair):
+    """A token signed with a new kid triggers one JWKS refetch, then validates."""
+    rotated = dict(keypair[1], kid="rotated-kid")
+    fetches = []
+
+    async def fetch():
+        fetches.append(1)
+        monkeypatch.setattr(auth, "_jwks", [rotated])
+        monkeypatch.setattr(auth, "_jwks_fetched_at", auth.time.monotonic())
+        return [rotated]
+
+    monkeypatch.setattr(auth, "_fetch_jwks", fetch)
+    monkeypatch.setattr(auth, "_jwks_fetched_at", 0.0)  # cache is old
+    tok = jwt.encode(jwt.get_unverified_claims(_token(configured, ["spm-viewers"])),
+                     configured, algorithm="RS256", headers={"kid": "rotated-kid"})
+    assert _call(_request(token=tok))["user_id"] == "user-1"
+    assert len(fetches) == 1
+
+
+def test_unknown_kid_refetch_is_rate_limited(configured, monkeypatch):
+    fetches = []
+
+    async def fetch():
+        fetches.append(1)
+        return auth._jwks
+
+    monkeypatch.setattr(auth, "_fetch_jwks", fetch)
+    monkeypatch.setattr(auth, "_jwks_fetched_at", auth.time.monotonic())  # just fetched
+    for i in range(5):
+        tok = jwt.encode(jwt.get_unverified_claims(_token(configured, ["spm-admins"])),
+                         configured, algorithm="RS256", headers={"kid": f"random-{i}"})
+        assert _status(_request(token=tok)) == 401
+    assert fetches == []
+
+
+@pytest.mark.parametrize("host,ecs,ok", [
+    ("127.0.0.1", False, True), ("::1", False, True), ("localhost", False, True),
+    ("0.0.0.0", False, False), ("10.0.0.5", False, False), ("127.0.0.1", True, False),
+])
+def test_auth_disabled_only_on_local_loopback(monkeypatch, host, ecs, ok):
+    monkeypatch.setenv("SPM_AUTH_DISABLED", "true")
+    if ecs:
+        monkeypatch.setenv("ECS_CONTAINER_METADATA_URI_V4", "http://169.254.170.2/v4/x")
+    else:
+        monkeypatch.delenv("ECS_CONTAINER_METADATA_URI_V4", raising=False)
+        monkeypatch.delenv("ECS_CONTAINER_METADATA_URI", raising=False)
+    if ok:
+        auth.assert_auth_disabled_is_local(host)
+    else:
+        with pytest.raises(RuntimeError):
+            auth.assert_auth_disabled_is_local(host)
+
+
+def test_auth_enabled_never_blocks_startup(monkeypatch):
+    monkeypatch.delenv("SPM_AUTH_DISABLED", raising=False)
+    auth.assert_auth_disabled_is_local("0.0.0.0")

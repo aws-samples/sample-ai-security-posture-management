@@ -23,6 +23,6 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio "moto[dynamodb]" boto3 opentelemetry-api opentelemetry-sdk fastapi httpx "python-jose[cryptography]>=3.4.0"
+          pip install pytest pytest-asyncio "moto[dynamodb]" boto3 opentelemetry-api opentelemetry-sdk opentelemetry-instrumentation-fastapi fastapi httpx "python-jose[cryptography]>=3.4.0"
       - name: Run tests
         run: pytest -q

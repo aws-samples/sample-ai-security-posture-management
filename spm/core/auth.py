@@ -82,7 +82,7 @@ def is_public(path: str, method: str) -> bool:
 _READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 _JWKS_MIN_REFRESH_SEC = 60  # bound refetches triggered by unknown key IDs
 _jwks: list | None = None
-_jwks_fetched_at = 0.0
+_jwks_fetched_at = float("-inf")  # "never"; monotonic() counts from boot, so 0.0 isn't "old"
 
 
 def auth_disabled() -> bool:

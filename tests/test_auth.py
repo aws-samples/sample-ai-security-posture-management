@@ -175,7 +175,10 @@ def test_rotated_signing_key_is_fetched_once(configured, monkeypatch, keypair):
         return [rotated]
 
     monkeypatch.setattr(auth, "_fetch_jwks", fetch)
-    monkeypatch.setattr(auth, "_jwks_fetched_at", 0.0)  # cache is old
+    # Cache is older than the refetch interval. Relative to monotonic(), not 0.0:
+    # monotonic() counts from boot and can be under 60 s on a fresh CI runner.
+    monkeypatch.setattr(auth, "_jwks_fetched_at",
+                        auth.time.monotonic() - auth._JWKS_MIN_REFRESH_SEC - 1)
     tok = jwt.encode(jwt.get_unverified_claims(_token(configured, ["spm-viewers"])),
                      configured, algorithm="RS256", headers={"kid": "rotated-kid"})
     assert _call(_request(token=tok))["user_id"] == "user-1"

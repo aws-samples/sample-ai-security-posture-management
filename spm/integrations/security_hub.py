@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import boto3
 
 from spm.core.registry import finding_sink
+from spm.core.errors import public_error
 
 REGION = os.getenv("AWS_REGION", "us-east-1")
 
@@ -68,8 +69,8 @@ def export_findings(findings: list[dict]) -> dict:
     try:
         account = boto3.client("sts", region_name=REGION).get_caller_identity()["Account"]
         sh = boto3.client("securityhub", region_name=REGION)
-    except Exception as e:
-        return {"sink": "security_hub", "error": f"init failed: {e}"}
+    except Exception:
+        return {"sink": "security_hub", "error": public_error("security_hub init")}
 
     asff = [_to_asff(f, account, REGION) for f in findings if f.get("finding_id")]
     imported, failed = 0, 0

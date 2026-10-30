@@ -16,8 +16,15 @@ safe: if garak is not present, it returns guidance instead of failing.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+
+from spm.core.errors import public_error
+
+# garak probe specs are comma-separated module[.Class] names. Rejecting anything
+# else stops a caller from smuggling extra CLI flags (e.g. "--report_prefix").
+_PROBES_RE = re.compile(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*(,[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*)*$")
 
 
 def garak_available() -> bool:
@@ -32,6 +39,8 @@ def run_garak(rest_endpoint: str | None = None, probes: str = "promptinject,dan"
     caller is responsible for providing a valid garak REST generator config if a
     non-default endpoint is used.
     """
+    if not _PROBES_RE.fullmatch(probes or ""):
+        return {"status": "error", "error": "invalid probes; expected comma-separated garak probe names"}
     if not garak_available():
         return {
             "status": "garak_not_installed",
@@ -41,7 +50,8 @@ def run_garak(rest_endpoint: str | None = None, probes: str = "promptinject,dan"
     endpoint = rest_endpoint or os.getenv("SPM_PROXY_URL", "http://localhost:8001/v1/chat/completions")
     try:
         # Minimal invocation; production use should supply a garak REST config file.
-        proc = subprocess.run(
+        # Static executable, argument list (no shell), and validated probe names.
+        proc = subprocess.run(  # nosec B603
             ["garak", "--model_type", "rest", "--probes", probes],
             capture_output=True, text=True, timeout=timeout_sec,
             env={**os.environ, "SPM_PROXY_URL": endpoint},
@@ -50,5 +60,5 @@ def run_garak(rest_endpoint: str | None = None, probes: str = "promptinject,dan"
                 "stdout_tail": proc.stdout[-4000:], "stderr_tail": proc.stderr[-2000:]}
     except subprocess.TimeoutExpired:
         return {"status": "timeout", "timeout_sec": timeout_sec}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    except Exception:
+        return {"status": "error", "error": public_error("garak run")}

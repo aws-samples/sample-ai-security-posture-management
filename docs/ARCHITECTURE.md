@@ -70,24 +70,94 @@ evaluation, and performs privilege-escalation and attack-chain correlation.
 
 ## 5. Networking & delivery
 
-AI SPM registers two ECS services behind a dedicated ALB listener (default port
-`8090`). A CloudFront distribution sits in front of the listener: `/spm/*` routes
-to the SPM API, everything else to the SPM UI. The ALB security group must allow
-inbound on the listener port from the CloudFront origin-facing managed prefix
-list.
+AI SPM registers two ECS services behind a dedicated HTTPS ALB listener (default
+port `8090`, TLS 1.2+ via `ELBSecurityPolicy-TLS13-1-2-2021-06`). A CloudFront
+distribution on your dashboard hostname (ACM certificate, TLS 1.2+ for viewers)
+sits in front of the listener and connects to the ALB over HTTPS only, using an
+origin hostname that matches the ALB certificate: `/spm/*` routes to the SPM
+API, everything else to the SPM UI. CloudFront access logs go to an encrypted,
+non-public S3 bucket, whose own S3 server access logs go to the existing
+access-log bucket you provide. The ALB security group must allow inbound on the listener
+port from the CloudFront origin-facing managed prefix list. An AWS WAF web ACL
+(stack `03-spm-waf.yaml`, deployed in `us-east-1`) is attached to the
+distribution with the Amazon IP reputation list, the core rule set, known bad
+inputs and a per-IP rate limit.
 
-## 6. IAM
+## 6. Authentication & authorization
+
+**Identity.** `infra/00-spm-identity.yaml` creates the Cognito user pool:
+self-registration off (`AllowAdminCreateUserOnly: true`), TOTP MFA required on
+every sign-in, Cognito threat protection enforced (Plus plan), 14-character
+password policy, 15-minute ID and access tokens and
+8-hour refresh tokens, and the `spm-admins` / `spm-viewers` groups. Stack 01
+imports the pool and client IDs, so the API always uses this pool.
+
+**Authentication (default deny).** `require_auth` is a global FastAPI
+dependency, so every route, including routes added later, validates a Cognito
+ID token (RS256 signature against the pool's JWKS, issuer, audience = app
+client ID, `token_use = id`, expiry) unless its (path, method) pair is in
+`PUBLIC_ROUTES` (`GET /spm/health`, `POST /v1/chat/completions`,
+`GET /v1/models`); other methods on those paths still need a token. An unknown key ID
+triggers at most one JWKS refetch per minute, so key rotation needs no restart.
+The API fails closed: if `COGNITO_POOL_ID` / `COGNITO_CLIENT_ID` are unset,
+every request gets `503`. `SPM_AUTH_DISABLED=true` disables auth for local
+development only; startup fails if it is set inside ECS or with a non-loopback
+`SPM_API_HOST` (`python -m spm.api.serve`, which the image uses), and each
+request is refused unless its connection is loopback on both ends, so a direct
+uvicorn launch on all interfaces still cannot serve unauthenticated requests
+over the network.
+
+**Authorization.** The token's `cognito:groups` claim decides access. Read
+requests need `spm-viewers` or `spm-admins`; all other methods need
+`spm-admins`. `tests/test_route_auth.py` asserts that every non-public route
+returns 401 without a token and pins the list of GET routes, which must be
+read-only. Allowed admin actions and all denials go to the `spm.audit` log with
+the user ID. A user removed from a group keeps that group until their 15-minute
+ID token expires. CORS is off unless `SPM_CORS_ORIGINS` lists exact origins.
+
+**Browser.** The UI middleware sends a per-request nonce-based CSP
+(`'strict-dynamic'`, `connect-src` limited to the origin and Cognito,
+`frame-ancestors 'none'`). A CloudFront response-headers policy adds HSTS,
+`nosniff`, `X-Frame-Options: DENY`, a referrer policy and a deny-all CSP for API
+responses. Tokens are kept in `sessionStorage`.
+
+**Transparent proxy.** The `/v1/*` routes are not routed by the ALB; only
+callers inside the VPC reach them through Cloud Map. `/v1/chat/completions`
+applies per-key and per-IP rate limits and validates the caller's key with
+LiteLLM (`GET /v1/models`, cached for 60 seconds) before any detector, runtime
+event, AIDR alert or Bedrock call. Post-response detection and the `llm_call`
+event happen only when LiteLLM returns 2xx.
+
+## 7. IAM
+
+The ECS task execution role (created by the stack) has the AWS managed
+`AmazonECSTaskExecutionRolePolicy` plus `secretsmanager:GetSecretValue` on the
+LiteLLM key secret only. ECS injects that secret as `LITELLM_KEY`; the value is
+not in the task definition or CloudFormation parameters.
 
 The SPM task role grants:
 
-- DynamoDB CRUD on the four SPM tables and their indexes
-- X-Ray read (`GetTraceSummaries`, `BatchGetTraces`, `GetServiceGraph`) + segment write
-- Read-only discovery (`bedrock:ListAgents`, `bedrock:InvokeModel`,
-  `sagemaker:ListEndpoints`, `lambda:ListFunctions`, `cloudtrail:LookupEvents`)
+- DynamoDB CRUD on the four SPM tables and their indexes only, plus use of the
+  tables' customer managed KMS key only when DynamoDB calls KMS on the role's
+  behalf (`kms:ViaService`).
+- X-Ray segment and telemetry writes through the AWS managed
+  `AWSXRayDaemonWriteAccess` policy, and X-Ray read (`GetTraceSummaries`,
+  `BatchGetTraces`, `GetServiceGraph`).
+- `bedrock:InvokeModel` only on the classifier inference profile
+  (`ClassifierModelId`) and its foundation model (`ClassifierFoundationModelId`).
+- `bedrock:ApplyGuardrail` only on `BedrockGuardrailId`, and only when it is set.
+- `sns:Publish`, `events:PutEvents` and `securityhub:BatchImportFindings` only
+  on the topic, event bus and Security Hub product you configure, and only when
+  that integration is enabled.
+- Read-only discovery and inspection: Bedrock / AgentCore List and Get calls,
+  `sagemaker:ListEndpoints`, `lambda:ListFunctions`, `cloudtrail:LookupEvents`,
+  GuardDuty List/Get and IAM role/policy Get calls.
 
-Scope the `Resource: '*'` entries to your environment for least privilege.
+`Resource: '*'` is used only for the X-Ray read calls and the read-only
+discovery and inspection calls. Those actions list or describe resources
+across the account, so they can't be limited to ARNs known at deploy time.
 
-## 7. Extensibility
+## 8. Extensibility
 
 - **New scanners:** add a module under `spm/scanner/` returning
   `AgentInventoryItem` dicts and wire it into `orchestrator.run_scan`.

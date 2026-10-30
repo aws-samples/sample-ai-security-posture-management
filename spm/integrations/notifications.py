@@ -13,6 +13,7 @@ import os
 import boto3
 
 from spm.core.registry import finding_sink
+from spm.core.errors import public_error
 
 REGION = os.getenv("AWS_REGION", "us-east-1")
 _ALERT_SEVERITIES = {"critical", "high"}
@@ -28,8 +29,8 @@ def publish_sns(events: list[dict]) -> dict:
         return {"sink": "sns", "published": 0}
     try:
         sns = boto3.client("sns", region_name=REGION)
-    except Exception as e:
-        return {"sink": "sns", "error": str(e)}
+    except Exception:
+        return {"sink": "sns", "error": public_error("sns client")}
     published = 0
     for e in alerts:
         subject = f"[AI SPM] {e.get('severity', '').upper()} {e.get('event_type', 'event')}"
@@ -48,8 +49,8 @@ def emit_eventbridge(events: list[dict]) -> dict:
         return {"sink": "eventbridge", "skipped": "SPM_EVENT_BUS_NAME not set"}
     try:
         eb = boto3.client("events", region_name=REGION)
-    except Exception as e:
-        return {"sink": "eventbridge", "error": str(e)}
+    except Exception:
+        return {"sink": "eventbridge", "error": public_error("eventbridge client")}
     entries = [{
         "Source": "ai.spm",
         "DetailType": f"AI SPM {e.get('event_type', 'event')}",

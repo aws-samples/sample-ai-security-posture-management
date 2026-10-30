@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AI SPM - AWS WAF web ACL for the SPM CloudFront distribution. CloudFront web
+  ACLs must be created in us-east-1, so deploy this stack in us-east-1 and pass
+  the WebAclArn output to 02-spm-cdn.yaml. deploy.sh does both.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: ai-spm
+  RateLimitPer5Min:
+    Type: Number
+    Default: 2000
+    MinValue: 100
+    Description: Maximum requests per client IP in any 5-minute window before blocking.
+
+Rules:
+  MustBeUsEast1:
+    Assertions:
+      - Assert: !Equals [!Ref AWS::Region, us-east-1]
+        AssertDescription: CloudFront web ACLs must be deployed in us-east-1.
+
+Resources:
+  SPMWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub ${EnvironmentName}-spm-cloudfront
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub ${EnvironmentName}-spm-waf
+      Rules:
+        - Name: RateLimitPerIp
+          Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref RateLimitPer5Min
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: rate-limit-per-ip
+        - Name: AWSManagedRulesAmazonIpReputationList
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: ip-reputation
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+              # Prompt-testing endpoints accept request bodies above the 8 KB
+              # body-size rule; count instead of block for that one rule.
+              RuleActionOverrides:
+                - Name: SizeRestrictions_BODY
+                  ActionToUse:
+                    Count: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: common-rule-set
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: known-bad-inputs
+
+Outputs:
+  WebAclArn:
+    Description: Pass to 02-spm-cdn.yaml as WebAclArn.
+    Value: !GetAtt SPMWebAcl.Arn

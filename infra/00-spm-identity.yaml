@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AI SPM - Amazon Cognito user pool, app client and authorization groups for the
+  dashboard and API. Deploy first: the UI image is built with the pool and client
+  IDs, and 01-spm-platform.yaml imports them. Self-registration is disabled
+  (administrators create every user), TOTP MFA is required for every sign-in,
+  and ID tokens live 15 minutes so group changes take effect quickly.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: ai-spm
+  ThreatProtectionMode:
+    Type: String
+    Default: ENFORCED
+    AllowedValues: [ENFORCED, AUDIT, 'OFF']
+    Description: >
+      Cognito threat protection for sign-ins: ENFORCED blocks or challenges
+      risky sign-ins and compromised credentials, AUDIT only logs risk, OFF
+      disables it. ENFORCED and AUDIT put the pool on the Cognito Plus feature
+      plan, which is billed per monthly active user; OFF uses Essentials.
+
+Conditions:
+  ThreatProtectionOn: !Not [!Equals [!Ref ThreatProtectionMode, 'OFF']]
+
+Resources:
+  SPMUserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub ${EnvironmentName}-spm-users
+      DeletionProtection: ACTIVE
+      # Threat protection (adaptive authentication + compromised-credential
+      # detection) needs the Plus plan.
+      UserPoolTier: !If [ThreatProtectionOn, PLUS, ESSENTIALS]
+      UserPoolAddOns:
+        AdvancedSecurityMode: !Ref ThreatProtectionMode
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      # No self-service sign-up: only administrators can create users.
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      # Every sign-in requires a TOTP code from an authenticator app. Users
+      # enroll on their first sign-in in the dashboard.
+      MfaConfiguration: 'ON'
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 14
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 1
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+  SPMUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref SPMUserPool
+      ClientName: !Sub ${EnvironmentName}-spm-dashboard
+      # Public browser client (SRP sign-in), so no client secret.
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AuthSessionValidity: 3
+      # Short ID/access tokens: the API reads groups from the ID token, so a
+      # removed admin loses access within 15 minutes. Refresh tokens end the
+      # session after 8 hours, after which the user signs in again with MFA.
+      TokenValidityUnits:
+        IdToken: minutes
+        AccessToken: minutes
+        RefreshToken: minutes
+      IdTokenValidity: 15
+      AccessTokenValidity: 15
+      RefreshTokenValidity: 480
+
+  SPMAdminsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref SPMUserPool
+      GroupName: spm-admins
+      Description: Full access, including scans, policy and defender changes and remediation.
+      Precedence: 0
+
+  SPMViewersGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref SPMUserPool
+      GroupName: spm-viewers
+      Description: Read-only access to the dashboard and API.
+      Precedence: 10
+
+Outputs:
+  UserPoolId:
+    Value: !Ref SPMUserPool
+    Export:
+      Name: !Sub ${EnvironmentName}-SPMUserPoolId
+  UserPoolClientId:
+    Value: !Ref SPMUserPoolClient
+    Export:
+      Name: !Sub ${EnvironmentName}-SPMUserPoolClientId
+  UserPoolArn:
+    Value: !GetAtt SPMUserPool.Arn

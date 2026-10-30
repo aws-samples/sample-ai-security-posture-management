@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 from spm.core import db
 from spm.core.models import RuntimeEvent
+from spm.core.errors import public_error
 
 LITELLM_URL = os.getenv("LITELLM_URL", "http://localhost:4000")
 LITELLM_KEY = os.getenv("LITELLM_KEY", "")
@@ -93,8 +94,8 @@ async def _execute(action: str, target: str, reason: str) -> dict:
                     headers={"Authorization": f"Bearer {LITELLM_KEY}"},
                     json={"key": target})
                 result["executed"] = resp.status_code == 200
-    except Exception as e:
-        result["error"] = str(e)[:200]
+    except Exception:
+        result["error"] = public_error(f"guardian {action}")
     return result
 
 
